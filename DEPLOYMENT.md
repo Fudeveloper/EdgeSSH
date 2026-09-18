@@ -24,7 +24,7 @@
 ### 部署顺序
 
 1. 检查 Cloudflare 已有 Worker、D1；确认目标应用为本项目，避免覆盖其他项目。不自动读取或配置 Zero Trust。
-2. 复用或创建 `edgessh-accounts`，将真实 `database_id` 写入 `wrangler.toml`。初始全零 ID 只是占位。
+2. 复用或创建 `edgessh-accounts`，将目标环境的真实 `database_id` 写入 `wrangler.toml`；仓库当前配置的是线上数据库。
 3. Zero Trust 应用、域名及单管理员 Allow 策略由用户自行配置，本项目部署过程不代为创建或修改。
 4. 用户配置 Access 后，分别通过 `wrangler secret put ACCESS_TEAM_DOMAIN` 与 `wrangler secret put ACCESS_AUD` 注入。所有账号、主机与连接 API 均需 Access 保护；`workers.dev` 只允许固定测试 IP 的无敏感信息诊断。缺少这两个 Secret 时可先部署，但受保护 API 会返回 503，不能操作主机或连接 SSH。
 5. **只在首次部署时生成密钥**，通过标准输入执行 `wrangler secret put ENCRYPTION_KEY` 注入。不要在命令参数、源码、日志或明文配置里输出密钥。已有 Secret 必须复用，不可随意覆盖。
@@ -32,6 +32,19 @@
 7. 执行 `npm run check`，然后 `npm run deploy`，通过实际 Access 入口验收。
 
 密钥丢失将无法解密现有资料。更换密钥必须设计旧密钥解密、新密钥重加密的迁移，不可直接覆盖 Secret。当前版本不提供自动轮换。更换 Access 团队或身份导致 `sub` 改变时，也需要显式的数据迁移。
+
+### GitHub Actions
+
+`.github/workflows/deploy.yml` 在推送到 `main` 或手动触发时依次执行安装、项目检查、远程 D1 迁移与 Worker 部署。生产部署使用并发锁串行执行，避免迁移和 Worker 版本交错。
+
+仓库只需配置两个 Actions 值：
+
+| 名称 | 配置位置 | 要求 |
+| --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Actions Variable | 目标 Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | Actions Secret | 限定到目标账户，并具备 Workers 部署与 D1 迁移权限 |
+
+三个运行时 Worker Secret 不进入 GitHub Actions。首次部署或主动轮换时仍使用 `wrangler secret put` 单独管理；日常自动部署只复用 Cloudflare 中已有值。
 
 ## 验收清单（5.6 SOL 执行）
 
@@ -55,13 +68,13 @@
 - 首页为中文；原 SSH 工作台保留中英文切换。
 - 国旗使用本地 `flag-icons` SVG（MIT，许可证随静态资源部署），在 Windows 上也显示实际旗帜，不依赖 emoji 字体。
 
-## 2026-09-18 线上部署记录
+## 2026-09-19 线上部署记录
 
 - 正式入口：`https://ssh.dltwcnm.ccwu.cc`
 - D1：`edgessh-accounts`（`2c1b7a95-a5d6-4a72-a8d2-4132b74aa268`）
 - D1 schema：`hosts`、`d1_migrations`；记录数分别为 0、1
-- 活动版本：`18e848ff-31ea-4dda-87de-6759720c72f1`（地球转速 1.5 倍、定位服务回退、强制重新定位与诊断入口）
-- Secret 名称：`ENCRYPTION_KEY`、`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`；本次仅注入两个 Access Secret，未读取或覆盖 `ENCRYPTION_KEY`
+- 活动版本：`e587a233-7767-4a3d-ba67-0ba8fa255285`
+- Secret 名称：`ENCRYPTION_KEY`、`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`；本次部署未读取或覆盖任何运行时 Secret
 - 无会话 Smoke：正式入口 `/` 与 `/api/auth/me` 均返回 Access 302，TLS 正常；未记录重定向地址、Team Domain、AUD、JWT、Cookie 或 Secret 值
 - 诊断入口：`workers.dev` 已开启，仅额外公开固定 `8.8.8.8` 的定位链路检查；账号、主机、凭据与 SSH 等接口仍必须通过 Access JWT 校验
 - 待验收：需要用户登录 Access 后验收账号 API，并使用真实授权 SSH 目标验收终端、SFTP 与进程面板

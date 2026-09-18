@@ -146,6 +146,17 @@ npm run deploy
 
 完整配置顺序、安全边界与验收清单见 [部署指南](DEPLOYMENT.md)。
 
+### GitHub Actions 自动部署
+
+仓库内置的 `Deploy` workflow 会在推送到 `main` 后自动检查、迁移 D1 并部署，也可在 Actions 页面手动触发。首次使用前，在仓库的 `Settings > Secrets and variables > Actions` 中配置：
+
+| 名称 | GitHub 配置类型 | 用途 |
+| --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Variable | Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | Secret | 具备 Workers 部署和 D1 迁移权限的 API Token |
+
+Action 只需要这两项部署凭据。`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 继续作为 Worker Secret 保存在 Cloudflare，普通部署不会读取或覆盖它们。API Token 属于敏感信息，必须使用 GitHub Secret，不能保存为普通 Variable。
+
 ## 本地开发
 
 安装依赖并准备本地变量：
@@ -175,6 +186,7 @@ npm run dev
 
 ```text
 EdgeSSH/
+├── .github/workflows/ # GitHub Actions 自动部署
 ├── frontend/          # 主机总览、地球可视化与 SSH 工作台
 ├── src/
 │   ├── accounts/      # Access 认证、主机管理与加密存储
