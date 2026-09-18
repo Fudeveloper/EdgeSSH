@@ -73,7 +73,7 @@
 - 正式入口：`https://ssh.dltwcnm.ccwu.cc`
 - D1：`edgessh-accounts`（`2c1b7a95-a5d6-4a72-a8d2-4132b74aa268`）
 - D1 schema：`hosts`、`d1_migrations`；记录数分别为 0、1
-- 活动版本：`e587a233-7767-4a3d-ba67-0ba8fa255285`
+- 活动版本：由 GitHub Actions 的 `Deploy` workflow 自动发布，当前状态以 Actions 运行记录与 Cloudflare 控制台为准
 - Secret 名称：`ENCRYPTION_KEY`、`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`；本次部署未读取或覆盖任何运行时 Secret
 - 无会话 Smoke：正式入口 `/` 与 `/api/auth/me` 均返回 Access 302，TLS 正常；未记录重定向地址、Team Domain、AUD、JWT、Cookie 或 Secret 值
 - 诊断入口：`workers.dev` 已开启，仅额外公开固定 `8.8.8.8` 的定位链路检查；账号、主机、凭据与 SSH 等接口仍必须通过 Access JWT 校验
