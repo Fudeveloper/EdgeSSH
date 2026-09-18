@@ -47,6 +47,10 @@ export interface TerminalSize {
 }
 
 export interface Env {
+  DB: D1Database;
+  ENCRYPTION_KEY: string;
+  ACCESS_TEAM_DOMAIN: string;
+  ACCESS_AUD: string;
   SSH_SESSIONS: DurableObjectNamespace;
   ASSETS?: Fetcher;
   CONNECT_TIMEOUT_MS?: string;

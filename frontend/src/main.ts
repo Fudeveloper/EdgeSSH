@@ -1,9 +1,9 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { historyKey, historyLabel, normalizeHistory, upsertHistoryIfNewer, type HistoryEntry } from './history';
-import { getHistoryPasswordKey } from './history-key';
-import { decryptPasswordResult, encryptPassword, isEncryptedPassword } from './password-crypto';
+import { historyKey, historyLabel } from './history';
+import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, type CloudHost, type Credentials, type HostSystemInfo } from './cloud-api';
+import { Dashboard } from './dashboard';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
@@ -24,16 +24,7 @@ interface LocalizedMessage {
   en: string;
 }
 
-type SavedProfile = HistoryEntry;
-
-interface LegacySavedProfile extends Omit<SavedProfile, 'passwordEncrypted'> {
-  name?: string;
-  passwordBase64?: string;
-}
-
-interface StoredSavedProfile extends Omit<SavedProfile, 'passwordEncrypted'> {
-  passwordEncrypted?: unknown;
-}
+type SavedProfile = CloudHost & Credentials;
 
 interface PendingHistory {
   generation: number;
@@ -77,6 +68,7 @@ interface ServerMessage {
   ts?: number;
   algorithms?: Record<string, string>;
   url?: string;
+  system?: unknown;
 }
 
 interface WSSHOptions {
@@ -109,13 +101,9 @@ declare global {
   }
 }
 
-const PROFILE_STORAGE_KEY = 'workers-webssh.profiles.v2';
-const LEGACY_PROFILE_STORAGE_KEY = 'workers-webssh.profiles.v1';
-const HOST_KEY_STORAGE_KEY = 'workers-webssh.hostkeys.v1';
 const THEME_STORAGE_KEY = 'workers-webssh.theme';
 const LANGUAGE_STORAGE_KEY = 'workers-webssh.language';
 const MAX_KEY_BYTES = 65_536;
-const MAX_LEGACY_PASSWORD_BASE64_LENGTH = 16_384;
 const PING_INTERVAL_MS = 25_000;
 const CLIENT_CLOSE_SESSION_ERROR = 4000;
 const CLIENT_CLOSE_PROTOCOL_ERROR = 4002;
@@ -191,6 +179,7 @@ const EVENT_LABELS: Record<string, Translation> = {
   debug: ['调试', 'debug'],
   'host-key': ['主机密钥', 'host key'],
   sftp: ['文件管理', 'files'],
+  system: ['系统', 'system'],
 };
 
 const SERVER_EVENT_MESSAGES: Record<string, Translation> = {
@@ -380,7 +369,8 @@ function applyLanguage(language: Language, persist = false): void {
 }
 
 let profiles: SavedProfile[] = [];
-let hostKeys = loadHostKeys();
+let dashboard: Dashboard | undefined;
+let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
 let connectionState: ConnectionState = 'idle';
 let sessionStartedAt = 0;
@@ -408,6 +398,7 @@ let historyPasswordLoading = false;
 let historyPasswordLoadGeneration = 0;
 let historyMutationSequence = 0;
 let keyFileReadGeneration = 0;
+let profileSaveTask: Promise<void> = Promise.resolve();
 const latestHistoryMutation = new Map<string, number>();
 let panelOpen = false;
 let fileManager: FileManager;
@@ -710,298 +701,43 @@ function terminalTheme(): Record<string, string> {
   };
 }
 
-function isStoredSavedProfile(value: unknown): value is StoredSavedProfile {
-  if (!value || typeof value !== 'object') return false;
-  const item = value as Partial<StoredSavedProfile>;
-  return (
-    typeof item.id === 'string' &&
-    typeof item.host === 'string' &&
-    item.host.length >= 1 && item.host.length <= 253 && !/[\s/?#]/.test(item.host) &&
-    typeof item.port === 'number' &&
-    Number.isInteger(item.port) &&
-    item.port >= 1 &&
-    item.port <= 65_535 &&
-    typeof item.username === 'string' &&
-    item.username.length >= 1 && item.username.length <= 128 && !/[\r\n\0]/.test(item.username) &&
-    (item.authMethod === 'password' || item.authMethod === 'publickey') &&
-    typeof item.initialCommand === 'string' &&
-    item.initialCommand.length <= 4096 &&
-    typeof item.termType === 'string' &&
-    /^[A-Za-z0-9._+-]{1,64}$/.test(item.termType) &&
-    typeof item.encoding === 'string' &&
-    ['utf-8', 'gb18030', 'big5'].includes(item.encoding) &&
-    typeof item.fingerprint === 'string' &&
-    (item.fingerprint === '' || SSH_FINGERPRINT_RE.test(item.fingerprint)) &&
-    typeof item.updatedAt === 'number' &&
-    Number.isFinite(item.updatedAt) &&
-    item.updatedAt >= 0 &&
-    item.updatedAt <= 8_640_000_000_000_000
-  );
-}
-
-function sanitizeSavedProfile(value: unknown): SavedProfile | null {
-  if (!isStoredSavedProfile(value)) return null;
-  const profile: SavedProfile = {
-    id: value.id,
-    host: value.host,
-    port: value.port,
-    username: value.username,
-    authMethod: value.authMethod,
-    initialCommand: value.initialCommand,
-    termType: value.termType,
-    encoding: value.encoding,
-    fingerprint: value.fingerprint,
-    updatedAt: value.updatedAt,
-  };
-  if (value.authMethod === 'password' && isEncryptedPassword(value.passwordEncrypted)) {
-    profile.passwordEncrypted = value.passwordEncrypted;
-  }
-  return profile;
-}
-
-function isLegacySavedProfile(value: unknown): value is LegacySavedProfile {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const item = value as Partial<LegacySavedProfile>;
-  return typeof item.id === 'string'
-    && typeof item.host === 'string' && item.host.length >= 1 && item.host.length <= 253 && !/[\s/?#]/.test(item.host)
-    && typeof item.port === 'number' && Number.isInteger(item.port) && item.port >= 1 && item.port <= 65_535
-    && typeof item.username === 'string' && item.username.length >= 1 && item.username.length <= 128 && !/[\r\n\0]/.test(item.username)
-    && (item.authMethod === 'password' || item.authMethod === 'publickey')
-    && (item.passwordBase64 === undefined || (
-      typeof item.passwordBase64 === 'string'
-      && item.passwordBase64.length <= MAX_LEGACY_PASSWORD_BASE64_LENGTH
-      && /^[A-Za-z0-9+/]*={0,2}$/.test(item.passwordBase64)
-    ))
-    && typeof item.initialCommand === 'string' && item.initialCommand.length <= 4096
-    && typeof item.termType === 'string' && /^[A-Za-z0-9._+-]{1,64}$/.test(item.termType)
-    && typeof item.encoding === 'string' && ['utf-8', 'gb18030', 'big5'].includes(item.encoding)
-    && typeof item.fingerprint === 'string' && (item.fingerprint === '' || SSH_FINGERPRINT_RE.test(item.fingerprint))
-    && typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt)
-    && item.updatedAt >= 0 && item.updatedAt <= 8_640_000_000_000_000;
-}
-
-function decodeLegacyPassword(encoded: string): string | null {
-  try {
-    const binary = atob(encoded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    const password = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    if (password.length > 4096) return null;
-    let canonical = '';
-    for (const byte of new TextEncoder().encode(password)) canonical += String.fromCharCode(byte);
-    return btoa(canonical) === encoded ? password : null;
-  } catch {
-    return null;
-  }
-}
-
 function passwordContext(profile: Pick<SavedProfile, 'host' | 'port' | 'username'>): string {
   return historyKey(profile.host, profile.port, profile.username);
 }
 
-function mergeSavedProfiles(preferred: SavedProfile[], fallback: SavedProfile[]): SavedProfile[] {
-  // Credentials are part of an atomic profile revision. Inheriting a password
-  // from an older revision could revive a deliberately cleared credential.
-  return normalizeHistory([...preferred, ...fallback]);
-}
-
-async function migrateLegacyProfiles(values: unknown[]): Promise<SavedProfile[]> {
-  const key = await getHistoryPasswordKey();
-  const migrated = await Promise.all(values.map(async (value): Promise<SavedProfile | null> => {
-    if (!isLegacySavedProfile(value)) return null;
-    const profile: SavedProfile = {
-      id: value.id,
-      host: value.host,
-      port: value.port,
-      username: value.username,
-      authMethod: value.authMethod,
-      initialCommand: value.initialCommand,
-      termType: value.termType,
-      encoding: value.encoding,
-      fingerprint: value.fingerprint,
-      updatedAt: value.updatedAt,
-    };
-    const hasStoredPassword = value.authMethod === 'password' && value.passwordBase64 !== undefined;
-    const password = hasStoredPassword ? decodeLegacyPassword(value.passwordBase64!) : null;
-    if (password !== null) {
-      if (key) {
-        try {
-          profile.passwordEncrypted = await encryptPassword(password, key, passwordContext(profile));
-        } catch { /* Preserve metadata and discard the reversible password below. */ }
-      }
-    }
-    return profile;
-  }));
-  return normalizeHistory(migrated.filter((profile): profile is SavedProfile => profile !== null));
-}
-
-interface StoredArray {
-  present: boolean;
-  values: unknown[];
-}
-
-function readStoredArray(storageKey: string): StoredArray {
-  let serialized: string | null;
-  try {
-    serialized = localStorage.getItem(storageKey);
-  } catch {
-    return { present: false, values: [] };
-  }
-  if (serialized === null) return { present: false, values: [] };
-  try {
-    const parsed: unknown = JSON.parse(serialized);
-    return { present: true, values: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { present: true, values: [] };
-  }
-}
-
-async function loadProfilesWithoutLock(): Promise<SavedProfile[]> {
-  const currentStorage = readStoredArray(PROFILE_STORAGE_KEY);
-  const current = normalizeHistory(currentStorage.values
-      .map(sanitizeSavedProfile)
-      .filter((profile): profile is SavedProfile => profile !== null));
-  const legacyStorage = readStoredArray(LEGACY_PROFILE_STORAGE_KEY);
-  if (!legacyStorage.present) return current;
-
-  const migrated = await migrateLegacyProfiles(legacyStorage.values);
-  const merged = mergeSavedProfiles(current, migrated);
-
-  try {
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(merged));
-    // v1 contains reversible passwords. Once v2 metadata is durable, never keep
-    // an unencrypted fallback; failed credentials intentionally become empty.
-    localStorage.removeItem(LEGACY_PROFILE_STORAGE_KEY);
-  } catch {
-    // Keep the in-memory migration result and retry cleanup on a later load.
-  }
-  return merged;
-}
-
-function loadCurrentProfiles(): SavedProfile[] {
-  return normalizeHistory(readStoredArray(PROFILE_STORAGE_KEY).values
-    .map(sanitizeSavedProfile)
-    .filter((profile): profile is SavedProfile => profile !== null));
-}
-
 async function loadProfiles(): Promise<SavedProfile[]> {
-  // Local Storage has no cross-tab transaction primitive. In browsers without
-  // Web Locks, migrate only when v2 is absent; once it exists, prefer a safe
-  // read over an unlocked merge that can lose another tab's changes.
-  if (!('locks' in navigator)) {
-    return readStoredArray(PROFILE_STORAGE_KEY).present
-      ? loadCurrentProfiles()
-      : loadProfilesWithoutLock();
-  }
-  try {
-    return await navigator.locks.request('workers-webssh.profiles.v2', loadProfilesWithoutLock);
-  } catch {
-    // A rejected lock request must not keep the entire application hidden.
-    // Avoid an unlocked v1 migration here because it could overwrite another tab.
-    return loadCurrentProfiles();
-  }
-}
-
-function loadHostKeys(): Record<string, string> {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(HOST_KEY_STORAGE_KEY) ?? '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([key, value]) => key.length <= 512 && typeof value === 'string' && SSH_FINGERPRINT_RE.test(value)),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function persistProfileSnapshot(): boolean {
-  try {
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profiles));
-    return true;
-  } catch {
-    return false;
-  }
+  const saved = await listHosts();
+  hostKeys = Object.fromEntries(saved.filter((host) => host.fingerprint).map((host) => [passwordContext(host), host.fingerprint]));
+  return saved;
 }
 
 async function persistHistoryMutation(mutation: HistoryMutation): Promise<HistoryMutationResult> {
-  const write = (): HistoryMutationResult => {
-    const snapshot = readStoredArray(PROFILE_STORAGE_KEY);
-    const stored = snapshot.values
-      .map(sanitizeSavedProfile)
-      .filter((profile): profile is SavedProfile => profile !== null);
-    const base = snapshot.present ? normalizeHistory(stored) : profiles;
-    if (mutation.kind === 'upsert') {
-      const update = upsertHistoryIfNewer(base, mutation.profile);
-      profiles = update.entries;
-      if (!update.applied) return { persisted: true, applied: false };
-    } else {
-      profiles = base.filter((profile) => passwordContext(profile) !== mutation.target);
-      if (profiles.length === base.length) return { persisted: true, applied: false };
-    }
-    if (!persistProfileSnapshot()) {
-      profiles = base;
-      return { persisted: false, applied: false };
-    }
-    return { persisted: true, applied: true };
-  };
-  if (!('locks' in navigator)) {
-    // Older browsers have no serializable local-storage transaction. A fresh
-    // read still minimizes the conflict window while preserving functionality.
-    return write();
-  }
   try {
-    return await navigator.locks.request('workers-webssh.profiles.v2', write);
+    if (mutation.kind === 'upsert') {
+      const profile = mutation.profile;
+      const existing = profiles.find((host) => host.id === profile.id);
+      await saveHost(profile, existing?.id);
+    } else {
+      const profile = profiles.find((host) => passwordContext(host) === mutation.target);
+      if (profile) await removeHost(profile.id);
+    }
+    profiles = await loadProfiles();
+    return { persisted: true, applied: true };
   } catch {
-    // If Web Locks exists but rejects the request, an unlocked read-modify-write
-    // could silently discard another tab's history.
     return { persisted: false, applied: false };
   }
 }
 
-function persistHostKeys(): boolean {
-  try {
-    localStorage.setItem(HOST_KEY_STORAGE_KEY, JSON.stringify(hostKeys));
-    return true;
-  } catch {
-    toast(bilingual('此浏览器无法保存主机指纹。', 'Host fingerprints could not be saved in this browser.'), 'error');
-    return false;
-  }
-}
-
 async function replaceRememberedHostKey(target: string, fingerprint: string): Promise<void> {
-  const write = (): boolean => {
-    const snapshot = readStoredArray(PROFILE_STORAGE_KEY);
-    const stored = snapshot.values
-      .map(sanitizeSavedProfile)
-      .filter((profile): profile is SavedProfile => profile !== null);
-    const base = snapshot.present ? normalizeHistory(stored) : profiles;
-    const baseHostKeys = loadHostKeys();
-    const updated = base.map((profile) => passwordContext(profile) === target
-      ? { ...profile, fingerprint }
-      : profile);
-    try {
-      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updated));
-      hostKeys = { ...baseHostKeys, [target]: fingerprint };
-      if (!persistHostKeys()) throw new Error('Host key persistence failed');
-      profiles = updated;
-      return true;
-    } catch {
-      hostKeys = baseHostKeys;
-      try { localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(base)); } catch { /* Best-effort rollback. */ }
-      return false;
-    }
-  };
-  let persisted = false;
+  hostKeys[target] = fingerprint;
+  const profile = profiles.find((host) => passwordContext(host) === target);
+  if (!profile) return;
   try {
-    persisted = 'locks' in navigator
-      ? await navigator.locks.request('workers-webssh.profiles.v2', write)
-      : write();
+    await saveHost({ ...profile, fingerprint }, profile.id);
+    profiles = await loadProfiles();
   } catch {
-    persisted = false;
+    toast(bilingual('当前连接已接受指纹，但云端保存失败。', 'Fingerprint accepted for this session, but cloud saving failed.'), 'error');
   }
-  if (!persisted) toast(bilingual(
-    '当前连接已接受新指纹，但无法在此浏览器中记住。',
-    'The new fingerprint was accepted for this connection but could not be remembered in this browser.',
-  ), 'error');
   renderProfiles();
 }
 
@@ -1079,6 +815,11 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
   const existing = profiles.find((item) => targetKey(item.host, item.port, item.username) === targetKey(host, port, username));
   const profile: SavedProfile = {
     id: existing?.id ?? crypto.randomUUID(),
+    name: existing?.name ?? host,
+    group: existing?.group ?? '个人',
+    location: existing?.location ?? null,
+    system: existing?.system ?? null,
+    hasCredential: true,
     host,
     port,
     username,
@@ -1089,12 +830,9 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
     fingerprint: ui.fingerprint.value.trim(),
     updatedAt: Date.now(),
   };
-  if (profile.authMethod !== 'password') return Promise.resolve(profile);
-  return getHistoryPasswordKey().then(async (key) => {
-    if (!key) return profile;
-    try { profile.passwordEncrypted = await encryptPassword(password, key, passwordContext(profile)); } catch { /* Save metadata without a password. */ }
-    return profile;
-  }).catch(() => profile);
+  if (profile.authMethod === 'password') profile.password = password;
+  else profile.privateKey = ui.privateKey.value;
+  return Promise.resolve(profile);
 }
 
 function validateProfileFields(): string | null {
@@ -1146,15 +884,19 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   ui.fingerprint.value = profile.fingerprint || hostKeys[targetKey(profile.host, profile.port, profile.username)] || '';
   setAuthMethod(profile.authMethod);
   passwordDirty = false;
-  historyPasswordLoading = profile.authMethod === 'password'
-    && Boolean(profile.passwordEncrypted);
+  historyPasswordLoading = true;
   setState(connectionState);
   renderProfiles();
-  if (!historyPasswordLoading) return;
-  const key = await getHistoryPasswordKey();
-  const decrypted = key
-    ? await decryptPasswordResult(profile.passwordEncrypted, key, context)
-    : null;
+  let credentials: Credentials;
+  try {
+    credentials = await hostCredentials(profile.id);
+  } catch (error) {
+    if (loadGeneration === historyPasswordLoadGeneration) {
+      historyPasswordLoading = false;
+      setState(connectionState);
+    }
+    throw error;
+  }
   if (loadGeneration !== historyPasswordLoadGeneration) return;
   historyPasswordLoading = false;
   const selectionUnchanged = ui.profileId.value === profile.id
@@ -1162,13 +904,8 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
     && authMethod() === profile.authMethod
     && !passwordDirty;
   if (selectionUnchanged) {
-    ui.password.value = decrypted?.password ?? '';
-    if (decrypted && !decrypted.ok) {
-      toast(bilingual(
-        '历史记录中的密码无法使用此浏览器配置解密，请重新输入。',
-        'The history password could not be decrypted by this browser profile. Enter it again.',
-      ), 'error');
-    }
+    ui.password.value = credentials.password ?? '';
+    ui.privateKey.value = credentials.privateKey ?? '';
   }
   setState(connectionState);
 }
@@ -1229,9 +966,7 @@ async function saveConnectedProfile(): Promise<void> {
   if (targetKey() === operation.target && retained) ui.profileId.value = retained.id;
   renderProfiles();
   if (!result.applied) return;
-  toast(saved.passwordEncrypted
-    ? bilingual('连接已加入历史记录，密码已使用当前浏览器配置密钥加密。', 'Connection added to history; the password is encrypted with this browser profile\'s key.')
-    : bilingual('连接已加入此浏览器的历史记录。', 'Connection added to this browser\'s history.'));
+  toast(bilingual('主机已加密保存至云端。', 'Host encrypted and saved to the cloud.'));
 }
 
 async function deleteProfile(id: string): Promise<void> {
@@ -1250,6 +985,7 @@ async function deleteProfile(id: string): Promise<void> {
 }
 
 function renderProfiles(): void {
+  dashboard?.setHosts(profiles);
   ui.profileList.replaceChildren();
   ui.profileCount.textContent = String(profiles.length);
   if (profiles.length === 0) {
@@ -1292,6 +1028,36 @@ function renderProfiles(): void {
     remove.textContent = '\u00d7';
     card.append(main, remove);
     ui.profileList.append(card);
+  }
+}
+
+function readServerSystemInfo(value: unknown): HostSystemInfo | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const family = record.family;
+  if (!['linux', 'darwin', 'freebsd', 'windows', 'unknown'].includes(String(family))) return null;
+  const { distribution, name, version, architecture } = record;
+  if (typeof distribution !== 'string' || typeof name !== 'string' || typeof version !== 'string' || typeof architecture !== 'string') return null;
+  if (distribution.length > 40 || name.length > 120 || version.length > 80 || architecture.length > 32) return null;
+  return {
+    family: family as HostSystemInfo['family'],
+    distribution,
+    name,
+    version,
+    architecture,
+  };
+}
+
+async function persistDetectedSystem(target: string, system: HostSystemInfo): Promise<void> {
+  await profileSaveTask;
+  const profile = profiles.find((item) => passwordContext(item) === target);
+  if (!profile || JSON.stringify(profile.system) === JSON.stringify(system)) return;
+  try {
+    const updated = await updateHostSystem(profile.id, system);
+    profiles = profiles.map((item) => item.id === updated.id ? { ...item, ...updated } : item);
+    renderProfiles();
+  } catch {
+    toast(bilingual('系统信息已探测，但无法保存到主机记录。', 'System information was detected but could not be saved.'), 'error');
   }
 }
 
@@ -1442,7 +1208,7 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   invalidateHistoryPasswordLoad();
   setState('connected');
   setPanelOpen(false);
-  void saveConnectedProfile().catch(() => {
+  profileSaveTask = saveConnectedProfile().catch(() => {
     toast(bilingual('连接成功，但无法更新历史记录。', 'Connected, but the history could not be updated.'), 'error');
   });
   startTimers();
@@ -1562,6 +1328,17 @@ function clearHostKeyPrompt(): void {
 
 function handleServerMessage(message: ServerMessage): void {
   const type = message.type ?? 'status';
+  if (type === 'system_info') {
+    const system = readServerSystemInfo(message.system);
+    if (!system) {
+      event(bilingual('收到无效的系统探测结果。', 'Received an invalid system probe result.'), 'protocol', true);
+      return;
+    }
+    const label = [system.name, system.version, system.architecture].filter(Boolean).join(' · ');
+    event(bilingual(`已探测操作系统：${label}`, `Detected operating system: ${label}`), 'system');
+    void persistDetectedSystem(currentTargetKey, system);
+    return;
+  }
   if (type === 'sftp_attach') {
     if (typeof message.url !== 'string' || !message.url.startsWith('/api/sftp?')) {
       event(bilingual('收到无效的文件管理连接信息。', 'Received invalid file-management connection details.'), 'protocol', true);
@@ -1834,6 +1611,7 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
+  dashboard?.openWorkspace();
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -2052,14 +1830,6 @@ function createDecoder(encoding: string): TextDecoder {
   }
 }
 
-// UTF-8 -> Base64, matching the decoder in applyURLParameters (and the
-// canonical form enforced by decodeLegacyPassword).
-function encodePasswordForURL(password: string): string {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(password)) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 function copySafeLink(): void {
   applyFormDefaults();
   const error = validateProfileFields();
@@ -2072,14 +1842,9 @@ function copySafeLink(): void {
   url.searchParams.set('port', ui.port.value || '22');
   url.searchParams.set('username', ui.username.value.trim());
   url.searchParams.set('term', ui.termType.value);
-  if (ui.initialCommand.value) url.searchParams.set('command', ui.initialCommand.value);
   if (ui.encoding.value !== 'utf-8') url.searchParams.set('encoding', ui.encoding.value);
-  const includesPassword = authMethod() === 'password' && ui.password.value !== '';
-  if (includesPassword) url.searchParams.set('password', encodePasswordForURL(ui.password.value));
   void navigator.clipboard.writeText(url.toString()).then(
-    () => toast(includesPassword
-      ? bilingual('连接链接已复制（含 Base64 密码，粘贴即自动连接，请谨慎分享）。', 'Connection link copied (Base64 password included; pasting auto-connects — share carefully).')
-      : bilingual('连接链接已复制（不含凭据）。', 'Connection link copied (credentials excluded).')),
+    () => toast(bilingual('连接链接已复制（不含凭据）。', 'Connection link copied (credentials excluded).')),
     () => toast(bilingual('无法访问剪贴板。', 'Could not access the clipboard.'), 'error'),
   );
 }
@@ -2112,23 +1877,14 @@ function applyURLParameters(): boolean {
     }
   }
   if (value('username')) ui.username.value = value('username')!;
-  if (value('command')) ui.initialCommand.value = value('command')!;
   if (value('term')) ui.termType.value = value('term')!;
   if (value('encoding')) ui.encoding.value = value('encoding')!;
   if (value('fingerprint')) ui.fingerprint.value = value('fingerprint')!;
   if (value('title')) document.title = value('title')!;
 
-  const legacyPassword = value('password');
-  if (legacyPassword) {
-    try {
-      const bytes = Uint8Array.from(atob(legacyPassword), (character) => character.charCodeAt(0));
-      ui.password.value = new TextDecoder().decode(bytes);
-      toast(bilingual('已从链接载入密码，使用后请从浏览器历史记录中删除该链接。', 'Password loaded from the link. Remove the link from browser history after use.'), 'error');
-    } catch {
-      toast(bilingual('密码 URL 参数不是有效的 Base64。', 'The password URL parameter is not valid Base64.'), 'error');
-    }
-  }
-  return Boolean(host && (value('autoconnect') === '1' || legacyPassword));
+  // 链接只预填非敏感字段，不接受凭据、命令或自动连接，防止诱导执行远程命令。
+  if (value('password') || value('command')) history.replaceState(null, '', location.pathname);
+  return false;
 }
 
 function applyWSSHOptions(options: WSSHOptions): void {
@@ -2253,7 +2009,7 @@ ui.profileList.addEventListener('click', (clickEvent) => {
   }
   const card = target.closest<HTMLElement>('[data-profile-id]');
   const profile = profiles.find((item) => item.id === card?.dataset.profileId);
-  if (profile) void applyProfile(profile);
+  if (profile) void applyProfile(profile).catch((error) => toast(error instanceof Error ? error.message : '读取凭据失败。', 'error'));
 });
 ui.panelToggle.addEventListener('click', () => {
   const opening = !panelOpen;
@@ -2449,9 +2205,7 @@ let storedTheme: string | null = null;
 try { storedTheme = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* Storage can be disabled. */ }
 if (storedTheme === 'light' || storedTheme === 'dark') document.documentElement.dataset.theme = storedTheme;
 async function initialize(): Promise<void> {
-  profiles = await loadProfiles();
   applyLanguage(currentLanguage);
-  element<HTMLElement>('app').hidden = false;
   renderProfiles();
   setPanelOpen(panelOpen);
   setAuthMethod('password');
@@ -2462,23 +2216,30 @@ async function initialize(): Promise<void> {
   ui.eventMessage.textContent = bilingual('Worker 运行时待命', 'Worker runtime standing by');
   initializeCompatibilityAPI();
   initMobileToolbar();
-  const shouldAutoConnect = applyURLParameters();
-  requestAnimationFrame(() => {
-    fitTerminal(false);
-    if (shouldAutoConnect) void connect();
+  applyURLParameters();
+  dashboard = new Dashboard({
+    refresh: async () => {
+      profiles = await loadProfiles();
+      renderProfiles();
+      return profiles;
+    },
+    connect: async (host) => {
+      await applyProfile(host);
+      await connect();
+    },
+    quickConnect: () => {
+      clearForm();
+      setPanelOpen(true);
+      requestAnimationFrame(() => { fitTerminal(false); ui.host.focus(); });
+    },
+    leaveWorkspace: () => {
+      disconnect(bilingual('已返回主机总览', 'Returned to host dashboard'));
+      clearCredentials();
+    },
   });
+  await dashboard.start();
 }
 
-void initialize().catch(() => {
-  // History initialization must never make the connection UI unavailable.
-  profiles = loadCurrentProfiles();
-  applyLanguage(currentLanguage);
-  element<HTMLElement>('app').hidden = false;
-  renderProfiles();
-  setPanelOpen(panelOpen);
-  setAuthMethod('password');
-  setState('idle');
-  setWorkspaceTab(null);
-  initializeCompatibilityAPI();
-  initMobileToolbar();
+void initialize().catch((error) => {
+  toast(error instanceof Error ? error.message : '初始化失败，请刷新页面重试。', 'error');
 });

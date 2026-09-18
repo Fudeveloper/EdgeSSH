@@ -60,6 +60,8 @@ export class SSHSessionDO implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const accountId = request.headers.get('x-account-id');
+    if (!accountId) return Response.json({ error: 'Authentication required' }, { status: 401 });
     if (url.pathname === '/ticket' && request.method === 'POST') {
       const ip = request.headers.get('x-client-ip') ?? 'unknown';
       if (!/^[0-9a-f:.]{2,64}$|^local$|^unknown$/i.test(ip)) return Response.json({ error: 'Invalid client address' }, { status: 400 });
@@ -68,11 +70,16 @@ export class SSHSessionDO implements DurableObject {
       const stored = await this.state.storage.transaction(async (tx) => {
         if (await tx.get(TICKET_STORAGE_KEY)) return false;
         await tx.put(TICKET_STORAGE_KEY, { secret: Array.from(secret), expiresAt: created.expiresAt, ip } satisfies StoredTicket);
+        await tx.put('account-id', accountId);
         await tx.setAlarm(created.expiresAt);
         return true;
       });
       secret.fill(0);
       return stored ? Response.json(created) : Response.json({ error: 'Ticket already created' }, { status: 409 });
+    }
+    // 主通道和辅助通道均绑定签发票据的账户，持有别人的 URL 也不能附着会话。
+    if (await this.state.storage.get('account-id') !== accountId) {
+      return Response.json({ error: 'Session owner mismatch' }, { status: 403 });
     }
     if (url.pathname === '/sftp') return this.attachSFTP(request);
     if (url.pathname === '/processes') return this.attachProcesses(request);
@@ -205,6 +212,7 @@ export class SSHSessionDO implements DurableObject {
 
   async alarm(): Promise<void> {
     await this.state.storage.delete(TICKET_STORAGE_KEY);
+    await this.state.storage.delete('account-id');
   }
 
   private connectTimeout(): number {
@@ -220,6 +228,8 @@ export class SSHSessionDO implements DurableObject {
       // replay race without retaining authorization material after an attempt.
       await tx.delete(TICKET_STORAGE_KEY);
       await tx.deleteAlarm();
+      // 清理最终闲置对象的授权元数据；活跃连接不依赖此定时器继续传输。
+      await tx.setAlarm(Date.now() + 7 * 86400_000);
       // 不校验 stored.ip !== ip：反代/CDN（如腾讯云 EdgeOne）多节点回源会让
       // CF-Connecting-IP 在签发与使用两次请求间不一致，导致 ticket 误判失效
       // （概率性 "WebSocket 传输错误"）。详见 verifyTicket 注释。stored.ip 保留用于审计。

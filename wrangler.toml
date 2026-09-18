@@ -1,7 +1,12 @@
-name = "cf-workers-webssh"
+name = "edgessh"
 main = "src/worker.ts"
 compatibility_date = "2026-07-01"
 workers_dev = true
+preview_urls = false
+
+routes = [
+  { pattern = "ssh.dltwcnm.ccwu.cc", custom_domain = true }
+]
 
 [build]
 command = "npm run build:web"
@@ -22,3 +27,9 @@ class_name = "SSHSessionDO"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SSHSessionDO"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "edgessh-accounts"
+database_id = "2c1b7a95-a5d6-4a72-a8d2-4132b74aa268"
+migrations_dir = "migrations"

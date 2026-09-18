@@ -1,188 +1,227 @@
-# CF-Workers-WebSSH
+> **本项目基于 [Worker Web SSH（CF-Workers-WebSSH）](https://github.com/cmliu/CF-Workers-WebSSH) 深度开发。**<br>
+> 在上游原生 WebSSH 能力的基础上，扩展主机管理、加密云端存储、地球可视化与操作系统识别，打造面向个人管理员的云端 SSH 工作台。感谢原作者的开源贡献。
 
-一个运行在 Cloudflare Workers 上的原生 WebSSH 终端。浏览器通过 HTTPS/WebSocket 连接 Worker，Worker 使用 Cloudflare TCP Sockets 直接连接公网 SSH 服务器，并在边缘运行时内完成 SSH 2.0 握手、主机密钥校验、用户认证和交互式 PTY 会话。
+<div align="center">
 
-运行时无 SSH 第三方依赖，前端、会话网关、SSH 客户端实现和静态资源均由同一个 Worker 部署提供。
+# EdgeSSH
 
-> [!IMPORTANT]
-> 项目始终允许匿名创建网关会话，不提供内置访问令牌或用户身份认证。公网部署前务必使用 Cloudflare Access、WAF 与限流策略保护页面和 API，并关闭不需要的 `workers.dev` 公网入口。
+**打开浏览器，连接你的服务器。**
+
+运行于 Cloudflare Workers 的轻量 SSH 工作台<br>
+主机总览 · 交互终端 · 文件管理 · 进程监控
+
+<p>
+  <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white">
+  <img alt="Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-546E7A?style=flat-square">
+</p>
+
+[功能特性](#功能特性) · [界面预览](#界面预览) · [快速开始](#快速开始) · [本地开发](#本地开发) · [安全与限制](#安全与限制)
+
+</div>
+
+---
+
+## 界面预览
+
+<div align="center">
+
+![EdgeSSH 演示界面](docs/images/edgessh-dashboard-demo.png)
+
+<sub>演示数据使用保留地址，不对应任何真实服务器。</sub>
+
+</div>
 
 ## 功能特性
 
-- Cloudflare Workers 原生部署，使用 Durable Objects 隔离每个 SSH 会话。
-- 基于 xterm.js 的响应式终端，支持桌面端和移动端、自动缩放、全屏和会话日志。
-- 内置 SFTP 文件管理，可浏览目录、上传/下载文件、新建与删除空目录、删除文件和重命名。
-- 内置实时进程管理，通过独立 WebSocket 和 SSH exec channel 展示 `top` 进程、CPU、负载、内存与 Swap 使用率。
-- 支持 SSH password 与单密码提示的 keyboard-interactive 认证，以及 Ed25519、RSA、ECDSA 的未加密 OpenSSH 私钥认证。
-- 首次连接时暂停认证并显示主机 SHA-256 指纹，确认后才会发送 SSH 凭据。
-- SSH 连接成功后自动写入浏览器本地"历史记录"，密码使用 AES-256-GCM 加密，私钥不保存。
-- 支持 UTF-8、GB18030、Big5 显示编码、初始命令和分享链接（密码认证时链接携带 Base64 密码，粘贴即自动连接）。
-- 提供一次性会话票据、同源检查、HTTPS 强制、安全响应头和公网目标校验。
-- SSH 数据包、密钥交换、加密、认证和通道逻辑全部使用 TypeScript 与 Web Crypto 实现。
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🗂️ 主机管理</h3>
+      <p>集中保存服务器资料与连接凭据，支持搜索、分组筛选与编辑。从列表直接进入工作台，无需反复输入连接信息。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>🌍 地球可视化</h3>
+      <p>以可交互地球呈现主机地理位置，支持点位连接、刷新定位，配合城市与国旗展示服务器分布。</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>⌨️ 浏览器终端</h3>
+      <p>基于 xterm.js，支持交互式 Shell、窗口尺寸同步、全屏与会话日志，适配桌面和移动端，工作台支持中英文切换。</p>
+    </td>
+    <td valign="top">
+      <h3>📁 SFTP 文件管理</h3>
+      <p>在终端旁浏览远程目录，上传与下载文件、新建目录、重命名，以及删除文件或空目录。</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>📊 实时进程面板</h3>
+      <p>通过独立通道查看远端进程与 CPU、负载、内存和 Swap 信息，无需离开 SSH 工作台。</p>
+    </td>
+    <td valign="top">
+      <h3>🐧 系统自动识别</h3>
+      <p>通过 SSH 命令探测操作系统，记录系统版本与架构，并以品牌色圆角图标区分常见系统与发行版。</p>
+    </td>
+  </tr>
+</table>
+
+### 不只是一个终端
+
+- **边缘原生**：Worker 通过 Cloudflare TCP Sockets 直接连接 SSH 服务器，无需额外部署 SSH 中转服务，每个会话由 Durable Object 隔离。
+- **身份保护**：使用 Cloudflare Zero Trust Access 认证管理员，不提供匿名连接入口或本地注册登录。
+- **加密存储**：主机资料、密码、私钥与指纹通过 AES-256-GCM 加密后保存到 D1，浏览器不持久化连接凭据。
+- **指纹确认**：首次连接时展示服务器 SHA-256 指纹，确认后才发送 SSH 凭据。
+- **灵活连接**：支持密码、单密码提示的 keyboard-interactive，以及未加密 OpenSSH 私钥认证；支持 UTF-8、GB18030、Big5 终端编码。
+- **轻量实现**：TypeScript + Vite + Web Crypto；地球采用 Canvas 球面投影，不引入 Three.js 等大型三维依赖。
 
 ## 工作原理
 
 ```text
-浏览器（xterm.js）
-    │  HTTPS：申请一次性会话票据
-    │  WSS：终端输入、输出和控制消息；独立 SFTP 文件通道
+浏览器 · 主机总览 / xterm.js / SFTP / 进程面板
+    │ HTTPS / WebSocket · Cloudflare Access 身份认证
     ▼
 Cloudflare Worker
-    │  同源检查、会话票据、静态资源
-    ▼
-每会话 Durable Object
-    │  消耗一次性票据、校验目标地址、运行 SSH 2.0 客户端
-    │  Cloudflare TCP Socket
-    ▼
-公网 SSH 服务器
+    ├── 静态资源与 API
+    ├── 主机资料加密读写 ──→ D1
+    └── 一次性会话票据
+            ▼
+    Durable Object · 每会话 SSH 客户端
+            │ Cloudflare TCP Socket
+            ▼
+        公网 SSH 服务器
 ```
 
-## 支持范围
+SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览器连接的是 Worker，而不是直接建立到服务器的 TCP 连接。
 
-| 类别 | 当前支持 |
+## 快速开始
+
+### 环境准备
+
+- Node.js **22.12.0 或更高版本**，以及 npm。
+- 可使用 Workers、Durable Objects 与 D1 的 Cloudflare 账户。
+- 自定义域名及 Cloudflare Zero Trust Access 应用。
+- 一台你有权访问的公网 SSH 服务器。
+
+### 获取项目
+
+```bash
+git clone https://github.com/aozorae/EdgeSSH.git
+cd EdgeSSH
+npm ci
+```
+
+### 配置与部署
+
+> [!IMPORTANT]
+> 本项目面向**单管理员**使用。Access 策略应仅允许管理员的明确身份，不要配置 Everyone 或 Bypass。缺少 Access 配置时，受保护 API 会拒绝访问，不会降级为匿名网关。
+
+1. 调整 `wrangler.toml` 中的 Worker 名称、自定义域名与 D1 绑定，**不要直接使用仓库中原部署环境的资源 ID**。
+2. 复用已有 D1 或创建自己的数据库，将其绑定为 `DB`，保留 Durable Object 类与迁移配置。
+3. 创建并配置 Access 应用，通过 Wrangler 注入下列 Secret。
+4. 应用数据库迁移，完成检查后部署。
+
+| 配置 | 用途 |
 | --- | --- |
-| SSH 协议 | SSH 2.0 交互式 Shell、PTY、SFTP v3、窗口尺寸同步、Keepalive |
-| 用户认证 | Password、单密码提示 keyboard-interactive、OpenSSH Ed25519、RSA、ECDSA P-256/P-384/P-521 私钥 |
-| 密钥交换 | `curve25519-sha256`、`ecdh-sha2-nistp256` |
-| 主机密钥 | Ed25519、ECDSA P-256/P-384/P-521、RSA SHA-2 |
-| 加密算法 | AES-128/256-GCM、AES-128/192/256-CTR |
-| MAC | HMAC-SHA2-256、HMAC-SHA2-512（AES-GCM 不使用独立 MAC） |
-| 终端编码 | UTF-8、GB18030、Big5（取决于浏览器 `TextDecoder` 支持） |
+| `DB` | 保存加密主机资料的 D1 绑定 |
+| `SSH_SESSIONS` | 隔离 SSH 会话的 Durable Object 绑定 |
+| `ASSETS` | 提供前端静态资源 |
+| `ACCESS_TEAM_DOMAIN` | Access 团队域名，通过 Secret 注入 |
+| `ACCESS_AUD` | Access 应用 Audience，通过 Secret 注入 |
+| `ENCRYPTION_KEY` | 32 字节安全随机密钥的标准 Base64，通过 Secret 注入 |
+| `CONNECT_TIMEOUT_MS` | TCP 建连超时，默认 `10000` 毫秒 |
 
-**限制**：只能连接公网 IP 或解析结果全部为公网地址的域名；不支持出站 TCP 25 端口；不支持加密私钥、PEM/PKCS#8 私钥、SSH Agent、多因素键盘交互认证、SCP、端口转发、ProxyJump、SSH 压缩和会话内 rekey。文件上传与下载单文件限制为 64 MiB，目录删除仅支持空目录。
-
-## 部署教程
-
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?repository=https://github.com/cmliu/CF-Workers-WebSSH)
-
-点击上方按钮，授权 Cloudflare 读取你的 GitHub 仓库后即可一键创建并部署 Worker。部署平台会自动读取仓库中的 `wrangler.toml`，并以 `npm run deploy` 作为构建命令完成首次构建与发布。
-
-> [!NOTE]
-> 一键部署需要你对自己的仓库有写入权限。若尚未 Fork，请先 Fork 到个人 GitHub 账号，部署时在仓库选择列表中选中你 Fork 后的仓库即可。
-
-1. Fork 该项目到用户自己的 GitHub 仓库。
-2. 在 `Cloudflare` > `Workers 和 Pages` > `创建应用程序` > `Continue with GitHub` 按钮，选择已 Fork 的项目进行部署。
-3. 在"构建命令"（Build Command）一栏中填入 `npm run deploy`。
-4. 点击"部署"按钮即可完成部署。
-
-## 配置项
-
-| 名称 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `CONNECT_TIMEOUT_MS` | Variable | `"10000"` | TCP 建连超时，运行时限制在 2000–30000 ms。 |
-| `SSH_SESSIONS` | Durable Object binding | 已配置 | 每个连接独立的会话对象。 |
-| `ASSETS` | Workers Assets binding | 已配置 | 将 `dist/` 静态资源交给 Worker 提供。 |
-
-会话创建始终匿名，不存在用于开启、关闭或保护会话创建的项目变量。公开网关可能被滥用、产生费用或导致 Cloudflare 账户受限，应在 Cloudflare 边缘配置身份访问策略、WAF、限流和使用监控。
-
-## 自定义域名与 Cloudflare Access
-
-绑定自定义域名：在 Cloudflare Dashboard 的 `Workers & Pages` -> 选择 Worker -> `Settings` -> `Domains & Routes` -> `Add` -> `Custom domain` 中添加。也可在 `wrangler.toml` 中写入：
-
-```toml
-routes = [
-  { pattern = "ssh.example.com", custom_domain = true }
-]
+```bash
+npx wrangler login
+npx wrangler secret put ACCESS_TEAM_DOMAIN
+npx wrangler secret put ACCESS_AUD
+npx wrangler secret put ENCRYPTION_KEY
+npx wrangler d1 migrations apply DB --remote
+npm run check
+npm run deploy
 ```
 
-确认自定义域名可用后，将 `workers_dev = false` 关闭公网 `workers.dev` 入口。
+**首次部署才生成加密密钥，后续部署复用已有 Secret。** 丢失或直接替换密钥会导致已有资料无法解密。密钥不要写入源码、配置文件或提交记录。
 
-在 Cloudflare Zero Trust 中为自定义域名创建 Self-hosted Application，配置只允许指定用户、邮箱域或身份提供商访问。WebSocket 使用同一站点的 Access 会话，可保护整个 WebSSH 页面和 API。建议纵深防御：
-
-- 确保所有可访问域名都受 Access 保护。
-- 设置 `workers_dev = false`，避免公开 `workers.dev` 地址绕过自定义域名策略。
-- 使用 WAF 规则限制异常请求和不需要的访问区域。
-- 对会话申请与 WebSocket 建连路径配置限流，并设置告警。
-- 验证 Access 策略同时覆盖页面、`/api/session` 与 `/api/ssh`。
+完整配置顺序、安全边界与验收清单见 [部署指南](DEPLOYMENT.md)。
 
 ## 本地开发
 
-```bash
-cp .env.example .dev.vars   # Windows: Copy-Item .env.example .dev.vars
-npm run dev                 # 启动 Wrangler，访问 http://localhost:8787
-```
-
-如需前端热更新，使用两个终端：
+安装依赖并准备本地变量：
 
 ```bash
-# 终端 1
-npm run build:web
-npx wrangler dev
-
-# 终端 2
-npm run dev:web    # 访问 http://localhost:5173，Vite 代理 /api 到 8787
+npm ci
+cp .env.example .dev.vars
+npx wrangler d1 migrations apply DB --local
+npm run dev
 ```
 
-> [!NOTE]
-> 本地 Worker 仍从你的网络连接目标 SSH 服务器，公网目标限制同样生效。不要使用生产 SSH 凭据测试不受信任的代码分支。
+按部署指南在 `.dev.vars` 中填写所需配置。本地开发仍保留 Access 身份校验，不提供匿名绕过；本地变量文件不得提交。
 
-## 常用命令
+需要前端热更新时，在另一个终端运行 `npm run dev:web`。Vite 默认位于 `http://localhost:5173`，将 `/api` 代理到本地 Worker 的 `8787` 端口；公网目标限制在本地同样生效。
 
-| 命令 | 作用 |
+| 命令 | 说明 |
 | --- | --- |
-| `npm run dev` | 通过 Wrangler 构建前端并启动本地 Worker |
+| `npm run dev` | 构建前端并启动本地 Worker |
 | `npm run dev:web` | 启动 Vite 前端开发服务器 |
-| `npm run build:web` | 将前端构建到 `dist/` |
-| `npm run typecheck` | 检查 Worker 与前端 TypeScript |
-| `npm run check` | 执行全部检查、构建和部署 dry-run |
-| `npm run deploy` | 通过 Wrangler 构建前端并部署到 Cloudflare |
+| `npm run build:web` | 构建前端到 `dist/` |
+| `npm run typecheck` | 检查 Worker 与前端类型 |
+| `npm test` | 运行测试 |
+| `npm run check` | 类型检查、测试与部署 dry-run（包含前端构建） |
+| `npm run deploy` | 构建前端并部署 Worker |
 
 ## 项目结构
 
 ```text
-.
-├── frontend/                  # xterm.js 前端
-│   ├── index.html
-│   └── src/
-│       ├── main.ts            # 连接管理、xterm、WebSocket 客户端
-│       ├── history.ts         # 历史记录归一化与去重
-│       ├── history-key.ts     # IndexedDB 中的 AES-GCM 密钥
-│       ├── password-crypto.ts # 历史密码 AES-GCM 加解密
-│       ├── ui-state.ts        # 连接按钮与面板状态机
-│       └── style.css
+EdgeSSH/
+├── frontend/          # 主机总览、地球可视化与 SSH 工作台
 ├── src/
-│   ├── backend/
-│   │   ├── durable-object.ts  # 会话票据、TCP Socket 与会话生命周期
-│   │   ├── security.ts        # 票据、同源与公网目标校验
-│   │   ├── session.ts         # SSH 状态机与浏览器消息桥接
-│   │   └── sftp-handler.ts    # SFTP 文件操作与传输状态
-│   ├── ssh/                   # SSH 协议、KEX、密码学、认证与通道
-│   ├── http-security.ts       # HTTPS 与安全响应头
-│   ├── types.ts               # Worker 环境、连接消息和 SSH 类型
-│   └── worker.ts              # HTTP/API/Assets 入口
-├── wrangler.toml              # Worker、Assets、Durable Object 与 migration
-└── package.json
+│   ├── accounts/      # Access 认证、主机管理与加密存储
+│   ├── backend/       # 会话生命周期、SFTP 与系统信息探测
+│   ├── ssh/           # SSH 协议、认证、密码学与通道
+│   └── worker.ts      # HTTP、API 与 WebSocket 入口
+├── migrations/        # D1 数据库迁移
+├── tests/             # 自动化测试
+├── DEPLOYMENT.md      # 部署与验收指南
+└── wrangler.toml      # Worker 与资源绑定配置
 ```
 
-## API 概览
+## 安全与限制
 
-| 接口 | 方法 | 用途 |
-| --- | --- | --- |
-| `/api/health` | `GET` | 返回 Worker 与 SSH 功能健康状态 |
-| `/api/session` | `POST` | 匿名创建一次性会话票据 |
-| `/api/ssh?ticket=...&session=...` | `GET` + WebSocket Upgrade | 进入对应 Durable Object 并建立 SSH 会话 |
-| `/api/sftp?session=...&token=...` | `GET` + WebSocket Upgrade | 使用一次性附着令牌进入当前会话的文件通道 |
-| `/api/processes?session=...&token=...` | `GET` + WebSocket Upgrade | 使用一次性附着令牌进入当前会话的进程监控通道 |
+### 安全边界
 
-所有 `/api/*` 响应均允许跨站访问，并支持浏览器 `OPTIONS` 预检请求。公网访问控制应由 Cloudflare Access、WAF 和限流策略提供。
+- **不是端到端加密**：Worker 是实际的 SSH 客户端，会在会话内处理明文凭据。请仅部署到可信账户，并使用最小权限的 SSH 账号或密钥。
+- 主机资料绑定 Access 身份；会话使用一次性票据，辅助通道使用附着令牌，并检查同源请求。
+- 连接目标仅限公网地址；域名解析后校验目标 IP，降低 SSRF 与 DNS 重绑定风险。
+- 地理定位会向外部定位服务发送服务器公网 IP，不发送 SSH 凭据或命令；位置点位**不代表在线状态**。
+- 建议通过受 Access 保护的自定义域名访问；若保留 `workers.dev` 诊断入口，不应将其视为公开 SSH 入口。
 
-## 安全说明
+### 当前支持范围
 
-- 一次性票据使用随机密钥和 HMAC-SHA256 签名，绑定请求端 IP、60 秒过期并立即销毁。
-- 域名解析后逐个检查公网地址，直接连接已验证 IP，限制 SSRF 与 DNS 重绑定。
-- SSH 主机密钥会验证交换签名并计算 `SHA256:` 指纹；没有固定指纹时，认证会暂停等待用户确认。
-- 历史密码使用 AES-256-GCM 加密，密钥保存在 IndexedDB 中，不写入 Local Storage。
-- 响应设置 CSP、HSTS、`X-Frame-Options`、`X-Content-Type-Options` 等安全头。
-- Worker 是实际的 SSH 客户端，密码或私钥会在 Worker 会话内存中被处理。请使用权限最小化的独立账号或密钥。
+| 类别 | 支持情况 |
+| --- | --- |
+| 会话 | SSH 2.0、交互式 Shell、PTY、窗口尺寸同步、Keepalive |
+| 文件协议 | SFTP v3；单文件上传与下载上限 64 MiB；仅删除空目录 |
+| 私钥认证 | 未加密 OpenSSH Ed25519、RSA、ECDSA P-256/P-384/P-521 |
+| 主机管理 | 每个身份最多 200 台；不支持团队共享 |
+| 终端编码 | UTF-8、GB18030、Big5，取决于浏览器解码支持 |
 
-## 许可证
+暂不支持加密私钥、PEM/PKCS#8 私钥、SSH Agent、多因素键盘交互认证、SCP、端口转发、ProxyJump、SSH 压缩与会话内 rekey；不支持出站 TCP 25 端口。
 
-[Apache License 2.0](LICENSE)
+## 参与贡献
+
+欢迎通过 Issue 反馈问题或通过 Pull Request 提交改进。提交前请运行 `npm run check`；涉及连接、文件传输或进程面板的改动，请使用真实且已获授权的 SSH 目标验证。
+
+反馈时请附上复现步骤和必要的环境信息，**不要上传密码、私钥、Access Token 或未脱敏的日志**。
 
 ## 致谢
 
-本项目在开发过程中参考了以下优秀开源项目，特此致谢：
+- [Worker Web SSH / cmliu/CF-Workers-WebSSH](https://github.com/cmliu/CF-Workers-WebSSH)：本项目的直接上游与开发基础。
+- [huashengdun/webssh](https://github.com/huashengdun/webssh)：WebSSH 终端与前端兼容 API 参考。
+- [newbietan/CloudSSH](https://github.com/newbietan/CloudSSH)：Cloudflare Workers SSH 实现参考。
+- [crazypeace/huashengdun-webssh](https://github.com/crazypeace/huashengdun-webssh)：WebSSH 二次开发与前端兼容性参考。
 
-- [huashengdun/webssh](https://github.com/huashengdun/webssh) —— 基于 WebSocket 的 WebSSH 终端，本项目前端兼容其 `wssh` JavaScript API。
-- [newbietan/CloudSSH](https://github.com/newbietan/CloudSSH) —— Cloudflare Workers 上的 SSH 实现参考。
-- [crazypeace/huashengdun-webssh](https://github.com/crazypeace/huashengdun-webssh) —— huashengdun/webssh 的二次开发维护分支，为本项目前端兼容性提供了参考。
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。使用、修改与分发时，请保留适用的许可证与版权声明。

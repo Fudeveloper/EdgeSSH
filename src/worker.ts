@@ -1,6 +1,10 @@
 import type { Env } from './types';
 import { SSHSessionDO } from './backend/durable-object';
 import { corsPreflightResponse, corsResponse, httpsRedirect, isProductionHttp, jsonError, secureResponse } from './http-security';
+import { currentAccount } from './accounts/auth';
+import { hostsRoute } from './accounts/hosts';
+import { apiFailure, json } from './accounts/http';
+import { locateHost } from './accounts/location';
 
 export { SSHSessionDO };
 
@@ -14,7 +18,7 @@ function hasValidWebSocketOrigin(request: Request): boolean {
   return origin === null || origin === new URL(request.url).origin;
 }
 
-async function sessionTicket(request: Request, env: Env): Promise<Response> {
+async function sessionTicket(request: Request, env: Env, accountId: string): Promise<Response> {
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) return jsonError('Expected application/json', 415);
   const contentLength = Number(request.headers.get('Content-Length') ?? 0);
   if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > 8192) return jsonError('Request body is too large', 413);
@@ -31,14 +35,14 @@ async function sessionTicket(request: Request, env: Env): Promise<Response> {
   const stub = env.SSH_SESSIONS.get(id);
   const response = await stub.fetch(new Request('https://session.internal/ticket', {
     method: 'POST',
-    headers: { 'x-client-ip': clientAddress(request) },
+    headers: { 'x-client-ip': clientAddress(request), 'x-account-id': accountId },
   }));
   if (!response.ok) return jsonError('Unable to create a session ticket', 503);
   const ticket = await response.json<{ ticket: string; expiresAt: number }>();
   return secureResponse(Response.json({ ...ticket, sessionId: id.toString() }, { headers: { 'Cache-Control': 'no-store' } }));
 }
 
-async function sshUpgrade(request: Request, env: Env): Promise<Response> {
+async function sshUpgrade(request: Request, env: Env, accountId: string): Promise<Response> {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return jsonError('WebSocket upgrade required', 426);
   const url = new URL(request.url);
   if (!hasValidWebSocketOrigin(request)) return jsonError('WebSocket origin is not allowed', 403);
@@ -48,6 +52,7 @@ async function sshUpgrade(request: Request, env: Env): Promise<Response> {
   let id: DurableObjectId;
   try { id = env.SSH_SESSIONS.idFromString(sessionId); } catch { return jsonError('Invalid session identifier', 401); }
   const headers = new Headers(request.headers);
+  headers.set('x-account-id', accountId);
   headers.delete('Cookie');
   headers.delete('Authorization');
   const sftpAttachToken = crypto.randomUUID();
@@ -69,7 +74,7 @@ async function sshUpgrade(request: Request, env: Env): Promise<Response> {
   return response;
 }
 
-async function sftpUpgrade(request: Request, env: Env): Promise<Response> {
+async function sftpUpgrade(request: Request, env: Env, accountId: string): Promise<Response> {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return jsonError('WebSocket upgrade required', 426);
   if (!hasValidWebSocketOrigin(request)) return jsonError('WebSocket origin is not allowed', 403);
   const url = new URL(request.url);
@@ -79,6 +84,7 @@ async function sftpUpgrade(request: Request, env: Env): Promise<Response> {
   let id: DurableObjectId;
   try { id = env.SSH_SESSIONS.idFromString(sessionId); } catch { return jsonError('Invalid session identifier', 401); }
   const headers = new Headers(request.headers);
+  headers.set('x-account-id', accountId);
   headers.delete('Cookie');
   headers.delete('Authorization');
   headers.delete('x-session-ticket');
@@ -93,7 +99,7 @@ async function sftpUpgrade(request: Request, env: Env): Promise<Response> {
   return response;
 }
 
-async function processUpgrade(request: Request, env: Env): Promise<Response> {
+async function processUpgrade(request: Request, env: Env, accountId: string): Promise<Response> {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return jsonError('WebSocket upgrade required', 426);
   if (!hasValidWebSocketOrigin(request)) return jsonError('WebSocket origin is not allowed', 403);
   const url = new URL(request.url);
@@ -103,6 +109,7 @@ async function processUpgrade(request: Request, env: Env): Promise<Response> {
   let id: DurableObjectId;
   try { id = env.SSH_SESSIONS.idFromString(sessionId); } catch { return jsonError('Invalid session identifier', 401); }
   const headers = new Headers(request.headers);
+  headers.set('x-account-id', accountId);
   headers.delete('Cookie');
   headers.delete('Authorization');
   headers.delete('x-session-ticket');
@@ -127,36 +134,49 @@ export default {
         if (request.method === 'GET' || request.method === 'HEAD') return httpsRedirect(request);
         return jsonError('HTTPS is required', 403);
       }
+      // Cookie 认证只接受同源请求；写操作必须有 Origin，阻断跨站表单与 CSRF。
+      const origin = request.headers.get('Origin');
+      if (isApiRequest && ((origin && origin !== url.origin)
+        || (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && origin !== url.origin)
+        || request.headers.get('Sec-Fetch-Site') === 'cross-site')) return jsonError('不允许跨站请求。', 403);
       if (isApiRequest && request.method === 'OPTIONS') {
         return corsResponse(corsPreflightResponse());
       }
       if (url.pathname === '/api/health' && request.method === 'GET') {
         return corsResponse(secureResponse(Response.json({ status: 'ok', runtime: 'cloudflare-workers', ssh: true }, { headers: { 'Cache-Control': 'no-store' } })));
       }
+      if (url.hostname.endsWith('.workers.dev') && url.pathname === '/api/diagnostics/location' && request.method === 'GET') {
+        const location = await locateHost('8.8.8.8');
+        if (!location) return corsResponse(jsonError('位置服务暂时不可用。', 503));
+        return corsResponse(json({ status: 'ok', sample: '8.8.8.8', location }));
+      }
+      const account = isApiRequest ? await currentAccount(request, env) : null;
+      if (isApiRequest && !account) return jsonError('请先登录。', 401);
+      if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ account });
+      if (url.pathname.startsWith('/api/hosts')) return await hostsRoute(request, env, account!.id, url.pathname);
       if (url.pathname === '/api/session') {
         if (request.method !== 'POST') return corsResponse(jsonError('Method not allowed', 405));
-        return corsResponse(await sessionTicket(request, env));
+        return corsResponse(await sessionTicket(request, env, account!.id));
       }
       if (url.pathname === '/api/ssh') {
         if (request.method !== 'GET') return corsResponse(jsonError('Method not allowed', 405));
         // 成功时 sshUpgrade 返回 101 WebSocket 升级响应，corsResponse 内部会原样
         // 放行（不重新包装）；失败时返回 JSON 错误，正常附加 CORS 头。
-        return corsResponse(await sshUpgrade(request, env));
+        return corsResponse(await sshUpgrade(request, env, account!.id));
       }
       if (url.pathname === '/api/sftp') {
         if (request.method !== 'GET') return corsResponse(jsonError('Method not allowed', 405));
-        return corsResponse(await sftpUpgrade(request, env));
+        return corsResponse(await sftpUpgrade(request, env, account!.id));
       }
       if (url.pathname === '/api/processes') {
         if (request.method !== 'GET') return corsResponse(jsonError('Method not allowed', 405));
-        return corsResponse(await processUpgrade(request, env));
+        return corsResponse(await processUpgrade(request, env, account!.id));
       }
       if (isApiRequest) return corsResponse(jsonError('Not found', 404));
       if (!env.ASSETS) return jsonError('Static assets binding is not configured', 503);
       return secureResponse(await env.ASSETS.fetch(request));
     } catch (error) {
-      console.error('Worker request failed', error instanceof Error ? error.message : String(error));
-      const response = jsonError('Internal server error', 500);
+      const response = apiFailure(error);
       return isApiRequest ? corsResponse(response) : response;
     }
   },

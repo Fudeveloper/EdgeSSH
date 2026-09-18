@@ -48,6 +48,7 @@ import { classifyHostKey } from '../ssh/host-key';
 import { encodeString, readUint32, toBufferSource } from '../ssh/utils';
 import { parseTopSnapshot } from './top-parser';
 import { retainTrailingMarkerPrefix } from './process-framing';
+import { parseSystemProbe, SYSTEM_PROBE_COMMAND } from './system-info';
 
 type Cipher = SSHAESGCMCipher | SSHAESCTRCipher;
 type Phase = 'version' | 'kex' | 'host-confirm' | 'auth' | 'pty' | 'shell' | 'ready' | 'closed';
@@ -79,6 +80,16 @@ interface PendingProcessKillChannel {
   stderrBytes: number;
   finalized: boolean;
 }
+interface PendingSystemProbeChannel {
+  readonly channelID: number;
+  readonly channel: SSHChannel;
+  timeout: ReturnType<typeof setTimeout> | null;
+  cancelled: boolean;
+  decoder: TextDecoder;
+  output: string;
+  outputBytes: number;
+  reported: boolean;
+}
 const LOCAL_WINDOW_THRESHOLD = 512 * 1024;
 const MAX_VERSION_BYTES = 8192;
 const MAX_QUEUED_INPUT = 1024 * 1024;
@@ -91,6 +102,8 @@ const PROCESS_KILL_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 // output on success, but a hostile or buggy server could dump arbitrary data through the exec
 // channel; cap the bytes we keep per stream so one bad request cannot exhaust worker memory.
 const PROCESS_KILL_MAX_BUFFER_BYTES = 4 * 1024;
+const SYSTEM_PROBE_TIMEOUT_MS = 10_000;
+const SYSTEM_PROBE_MAX_BUFFER_BYTES = 16 * 1024;
 const PROCESS_SNAPSHOT_MARKER = '__CF_WEBSSH_TOP_SNAPSHOT__';
 // Octal escapes keep the delimiter itself out of the command line shown by top.
 // `top` flags differ across platforms: Linux procps uses `-n 1` (1 iteration) + `-c` (full command line),
@@ -171,6 +184,7 @@ export class SSHSession {
   // Concurrent `kill -TERM <pid>` requests, keyed by local channel ID. Each request gets its
   // own exec channel so the top-monitor channel stays undisturbed.
   private readonly pendingProcessKillChannels = new Map<number, PendingProcessKillChannel>();
+  private systemProbe: PendingSystemProbeChannel | null = null;
   private ignoreNextKexPacket = false;
   private inputQueue: Uint8Array[] = [];
   private queueHeadOffset = 0;
@@ -252,6 +266,8 @@ export class SSHSession {
       if (kill.timeout) clearTimeout(kill.timeout);
     }
     this.pendingProcessKillChannels.clear();
+    if (this.systemProbe?.timeout) clearTimeout(this.systemProbe.timeout);
+    this.systemProbe = null;
     this.channels.clear();
     try { this.sftpWebSocket?.close(normal ? 1000 : 1011, normal ? 'SSH session closed' : 'SSH session failed'); } catch { /* already closed */ }
     this.sftpWebSocket = null;
@@ -651,6 +667,20 @@ export class SSHSession {
         if (this.phase !== 'pty') throw new Error('Unexpected shell channel open confirmation');
         this.pendingChannelRequest = 'pty';
         await this.sendEncrypted(channel.buildPTYRequest(this.config.cols, this.config.rows, this.config.term));
+      } else if (channel === this.systemProbe?.channel) {
+        const probe = this.systemProbe;
+        if (probe.timeout) { clearTimeout(probe.timeout); probe.timeout = null; }
+        if (probe.cancelled) {
+          await this.sendAuxiliaryChannelClose(channel);
+        } else {
+          try {
+            await this.sendEncrypted(channel.buildExecRequest(SYSTEM_PROBE_COMMAND));
+            probe.timeout = setTimeout(() => this.expireSystemProbe(probe), SYSTEM_PROBE_TIMEOUT_MS);
+          } catch {
+            probe.cancelled = true;
+            await this.sendAuxiliaryChannelClose(channel);
+          }
+        }
       } else if (this.pendingProcessKillChannels.has(channelID)) {
         const kill = this.pendingProcessKillChannels.get(channelID)!;
         kill.openConfirmed = true;
@@ -709,6 +739,8 @@ export class SSHSession {
       } else if (channel === this.processChannel) {
         this.processChannel = null;
         this.sendProcessError('SSH server rejected the process-monitor channel');
+      } else if (channel === this.systemProbe?.channel) {
+        this.cleanupSystemProbe(this.systemProbe);
       } else {
         const kill = this.pendingProcessKillChannels.get(channelID);
         if (kill) this.finalizeProcessKill(kill, 'SSH server rejected the kill channel');
@@ -729,6 +761,11 @@ export class SSHSession {
           await this.sendEncrypted(channel.buildShellRequest());
           this.shellTimer = setTimeout(() => this.markReady(), 3000);
         } else this.markReady();
+      } else if (channel === this.systemProbe?.channel) {
+        if (type === SSH_MSG_CHANNEL_FAILURE) {
+          this.systemProbe.cancelled = true;
+          await this.sendAuxiliaryChannelClose(channel);
+        }
       } else if (channel === this.sftpChannel && type === SSH_MSG_CHANNEL_SUCCESS) {
         const handler = this.sftpHandler;
         if (handler) {
@@ -759,6 +796,8 @@ export class SSHSession {
       if (isShell) {
         if (this.phase === 'shell') this.markReady();
         this.ws.send(output);
+      } else if (channel === this.systemProbe?.channel) {
+        this.appendSystemProbeOutput(this.systemProbe, output);
       } else if (channel === this.sftpChannel && this.sftpHandler) {
         try {
           this.sftpHandler.feed(output);
@@ -779,6 +818,8 @@ export class SSHSession {
       if (isShell) {
         if (this.phase === 'shell') this.markReady();
         this.ws.send(output);
+      } else if (channel === this.systemProbe?.channel) {
+        // 探测命令的 stderr 只代表该功能不可用，不应影响已经建立的终端会话。
       } else if (channel === this.sftpChannel) {
         this.sendSFTPError('protocol', new TextDecoder().decode(output) || 'SFTP channel reported an error');
       } else if (channel === this.processChannel) {
@@ -799,6 +840,10 @@ export class SSHSession {
     if (type === SSH_MSG_CHANNEL_EOF) {
       channel.handleEof(payload);
       if (isShell) this.status('remote_eof', 'SSH server finished sending output');
+      else if (channel === this.systemProbe?.channel) {
+        this.reportSystemProbe(this.systemProbe);
+        await this.sendAuxiliaryChannelClose(channel);
+      }
       else if (channel === this.sftpChannel) this.sftpHandler?.onClosed();
       else if (channel === this.processChannel) this.flushProcessBuffer();
       return;
@@ -812,7 +857,10 @@ export class SSHSession {
       } else {
         this.clearPendingSFTPChannelOpen(channel);
         this.channels.delete(channelID);
-        if (channel === this.sftpChannel) {
+        if (channel === this.systemProbe?.channel) {
+          this.reportSystemProbe(this.systemProbe);
+          this.cleanupSystemProbe(this.systemProbe);
+        } else if (channel === this.sftpChannel) {
           this.sftpHandler?.onClosed();
           this.sftpHandler = null;
           this.sftpChannel = null;
@@ -843,7 +891,74 @@ export class SSHSession {
     this.status('shell_ready', 'Shell is ready');
     if (this.sftpAttachUrl) this.sendJson({ type: 'sftp_attach', url: this.sftpAttachUrl });
     if (this.processAttachUrl) this.sendJson({ type: 'process_attach', url: this.processAttachUrl });
+    void this.openSystemProbeChannel().catch(() => undefined);
     void this.flushInput();
+  }
+
+  private async openSystemProbeChannel(): Promise<void> {
+    if (this.phase !== 'ready' || this.systemProbe) return;
+    const channelID = this.nextChannelID++;
+    const channel = new SSHChannel();
+    const probe: PendingSystemProbeChannel = {
+      channelID,
+      channel,
+      timeout: null,
+      cancelled: false,
+      decoder: new TextDecoder(),
+      output: '',
+      outputBytes: 0,
+      reported: false,
+    };
+    this.channels.set(channelID, channel);
+    this.systemProbe = probe;
+    try {
+      await this.sendEncrypted(channel.buildOpenSession(channelID));
+      if (this.systemProbe === probe) {
+        probe.timeout = setTimeout(() => this.expireSystemProbe(probe), SYSTEM_PROBE_TIMEOUT_MS);
+      }
+    } catch (error) {
+      this.cleanupSystemProbe(probe);
+      throw error;
+    }
+  }
+
+  private appendSystemProbeOutput(probe: PendingSystemProbeChannel, output: Uint8Array): void {
+    if (probe.cancelled || probe.reported) return;
+    if (probe.outputBytes + output.length > SYSTEM_PROBE_MAX_BUFFER_BYTES) {
+      probe.cancelled = true;
+      void this.sendAuxiliaryChannelClose(probe.channel);
+      return;
+    }
+    probe.outputBytes += output.length;
+    probe.output += probe.decoder.decode(output, { stream: true });
+  }
+
+  private reportSystemProbe(probe: PendingSystemProbeChannel): void {
+    if (probe.cancelled || probe.reported) return;
+    probe.reported = true;
+    if (probe.timeout) { clearTimeout(probe.timeout); probe.timeout = null; }
+    probe.output += probe.decoder.decode();
+    const system = parseSystemProbe(probe.output);
+    if (system) this.sendJson({ type: 'system_info', system });
+  }
+
+  private expireSystemProbe(probe: PendingSystemProbeChannel): void {
+    if (this.systemProbe !== probe) return;
+    probe.timeout = null;
+    probe.cancelled = true;
+    if (probe.channel.isOpen()) {
+      void this.sendAuxiliaryChannelClose(probe.channel);
+    } else {
+      // 保留 channels 中的协议对象以接住迟到的 open 回复，但立即释放探测缓冲与状态。
+      this.systemProbe = null;
+    }
+  }
+
+  private cleanupSystemProbe(probe: PendingSystemProbeChannel): void {
+    if (probe.timeout) clearTimeout(probe.timeout);
+    probe.timeout = null;
+    this.channels.delete(probe.channelID);
+    if (this.systemProbe === probe) this.systemProbe = null;
   }
 
   setSFTPAttachUrl(url: string): void {

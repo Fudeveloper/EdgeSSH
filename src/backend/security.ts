@@ -118,34 +118,46 @@ export function toSocketHostname(address: string): string {
 
 interface DnsAnswer { type: number; data: string }
 
-export async function resolvePublicAddresses(host: string): Promise<string[]> {
-  if (host.includes(':') || isIPv4(host)) return [host];
+async function resolveDnsType(host: string, type: 'A' | 'AAAA'): Promise<string[]> {
   const endpoint = 'https://cloudflare-dns.com/dns-query';
   const headers = { Accept: 'application/dns-json' };
-  const responses = await Promise.all(['A', 'AAAA'].map((type) => fetch(`${endpoint}?name=${encodeURIComponent(host)}&type=${type}`, {
+  const response = await fetch(`${endpoint}?name=${encodeURIComponent(host)}&type=${type}`, {
     headers,
     redirect: 'manual',
     signal: AbortSignal.timeout(5000),
-  })));
+  });
+  if (!response.ok) throw new Error('Unable to verify the target DNS records');
+  const responseUrl = new URL(response.url);
+  if (responseUrl.origin !== 'https://cloudflare-dns.com'
+    || !responseUrl.pathname.startsWith('/dns-query')
+    || !response.headers.get('Content-Type')?.toLowerCase().startsWith('application/dns-json')) {
+    throw new Error('Unexpected DNS resolver response');
+  }
+  const result = await response.json<{ Status: number; Answer?: DnsAnswer[] }>();
+  if (result.Status !== 0 && result.Status !== 3) throw new Error('Unable to verify the target DNS records');
+  if ((result.Answer?.length ?? 0) > 64) throw new Error('Target DNS response has too many records');
   const addresses: string[] = [];
-  for (const response of responses) {
-    if (!response.ok) throw new Error('Unable to verify the target DNS records');
-    const responseUrl = new URL(response.url);
-    if (responseUrl.origin !== 'https://cloudflare-dns.com'
-      || !responseUrl.pathname.startsWith('/dns-query')
-      || !response.headers.get('Content-Type')?.toLowerCase().startsWith('application/dns-json')) {
-      throw new Error('Unexpected DNS resolver response');
+  for (const answer of result.Answer ?? []) {
+    if (answer.type === 1 && isIPv4(answer.data)) addresses.push(answer.data);
+    if (answer.type === 28 && answer.data.includes(':')) {
+      const normalized = normalizeIPv6(answer.data);
+      if (!normalized.includes('%') && normalized.includes(':')) addresses.push(normalized);
     }
-    const result = await response.json<{ Status: number; Answer?: DnsAnswer[] }>();
-    if (result.Status !== 0 && result.Status !== 3) throw new Error('Unable to verify the target DNS records');
-    if ((result.Answer?.length ?? 0) > 64) throw new Error('Target DNS response has too many records');
-    for (const answer of result.Answer ?? []) {
-      if (answer.type === 1 && isIPv4(answer.data)) addresses.push(answer.data);
-      if (answer.type === 28 && answer.data.includes(':')) {
-        const normalized = normalizeIPv6(answer.data);
-        if (!normalized.includes('%') && normalized.includes(':')) addresses.push(normalized);
-      }
+  }
+  return addresses;
+}
+
+export async function resolvePublicAddresses(host: string, mode: 'strict' | 'best-effort' = 'strict'): Promise<string[]> {
+  if (host.includes(':') || isIPv4(host)) return [host];
+  const types = ['A', 'AAAA'] as const;
+  const results = await Promise.allSettled(types.map((type) => resolveDnsType(host, type)));
+  const addresses: string[] = [];
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      if (mode === 'strict') throw result.reason;
+      continue;
     }
+    addresses.push(...result.value);
   }
   return addresses;
 }

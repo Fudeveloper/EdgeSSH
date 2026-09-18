@@ -19,8 +19,7 @@ export function corsResponse(response: Response): Response {
   // 同源/CORS 约束，101 响应无需附加 CORS 头。
   if (response.webSocket) return response;
   const headers = new Headers(response.headers);
-  headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Content-Type');
   return new Response(response.body, {
     status: response.status,
