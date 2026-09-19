@@ -1,0 +1,173 @@
+# Cloudflare Zero Trust Access 配置
+
+EdgeSSH **不提供本地用户名 / 密码登录**。为了避免任何人直接打开你的 WebSSH，生产环境必须把访问入口放在 Cloudflare Zero Trust Access 后面。
+
+EdgeSSH 会在 Worker 内再次校验 Cloudflare Access 注入的 `Cf-Access-Jwt-Assertion`，包括签名、Issuer、Audience、有效期、用户 `sub` 和邮箱。因此，仅仅给域名加一个普通登录页还不够：**Access 应用、身份策略、`ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 必须对应同一个应用。**
+
+> [!IMPORTANT]
+> 本项目默认按**单管理员**设计。推荐使用“明确邮箱 + Allow”策略。不要使用 `Everyone`、`Bypass`，也不要只限制到整个邮箱域名。
+
+## 推荐方案：指定邮箱 + One-time PIN
+
+对于个人部署，最简单的方案是只允许你的邮箱，并使用 Cloudflare 的邮件验证码登录。
+
+### 1. 启用 One-time PIN（可选）
+
+如果你已经配置 Google、GitHub、Microsoft Entra ID 等身份提供商，可以直接跳过这一步。
+
+Cloudflare 新建的 Zero Trust 组织目前不会自动添加 One-time PIN。需要邮件验证码登录时：
+
+1. 打开 Cloudflare Dashboard。
+2. 进入 **Zero Trust > Integrations > Identity providers**。
+3. 在 **Your identity providers** 中选择 **Add new identity provider**。
+4. 选择 **One-time PIN** 并保存。
+
+Cloudflare 官方说明：
+https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/
+
+### 2. 创建 Access 应用
+
+1. 进入 **Zero Trust > Access controls > Applications**。
+2. 选择 **Create new application**。
+3. 选择 **Self-hosted and private**。
+4. 选择 **Add public hostname**。
+5. Application name 可填写 `EdgeSSH`。
+6. Public hostname 选择 EdgeSSH 实际使用的自定义域名，例如：
+
+   ```text
+   ssh.example.com
+   ```
+
+7. 不要把另一个无关域名，或未受保护的 `workers.dev` 地址当作正式入口。
+
+Cloudflare 官方说明：
+https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
+
+### 3. 添加身份访问策略
+
+在应用的 **Access policies** 中创建一条策略：
+
+| 项目 | 推荐值 |
+| --- | --- |
+| Policy name | `EdgeSSH Admin` |
+| Action | `Allow` |
+| Rule type | `Include` |
+| Selector | `Emails` |
+| Value | 你的完整邮箱，例如 `you@example.com` |
+
+如果需要多个管理员，请逐个添加明确邮箱。
+
+> [!WARNING]
+> 不要使用 `Include > Everyone`。如果使用 One-time PIN，也不要只写 `Include > Login Methods > One-time PIN`，否则任何能接收邮件验证码的人都可能符合策略。
+>
+> 本项目也不建议使用 `Emails ending in @example.com` 这类整域授权，除非你明确希望该域下所有可验证用户都能进入 EdgeSSH。
+
+Cloudflare Access 默认拒绝未匹配 Allow 策略的用户。
+
+策略说明：
+https://developers.cloudflare.com/cloudflare-one/access-controls/policies/
+
+### 4. 选择登录方式并保存应用
+
+在应用的身份验证设置中选择你希望允许的 Identity Provider。
+
+个人部署通常可以只保留：
+
+```text
+One-time PIN
+```
+
+如果只启用一个身份提供商，也可以开启 Cloudflare 的 instant authentication，让用户直接进入对应登录流程。
+
+保存应用后，先打开 EdgeSSH 的自定义域名测试一次。正确情况下，浏览器会先进入 Cloudflare Access 登录，再进入 EdgeSSH。
+
+## 获取 EdgeSSH 需要的两个 Access 参数
+
+### ACCESS_TEAM_DOMAIN
+
+进入 Cloudflare Zero Trust 的 **Settings**，找到 Team name / Team domain。
+
+例如 Cloudflare 显示：
+
+```text
+my-team.cloudflareaccess.com
+```
+
+则输入：
+
+```text
+my-team.cloudflareaccess.com
+```
+
+> [!IMPORTANT]
+> `ACCESS_TEAM_DOMAIN` **不要带** `https://`，不要带路径，也不要带末尾斜杠。
+
+### ACCESS_AUD
+
+1. 进入 **Zero Trust > Access controls > Applications**。
+2. 找到刚才创建的 EdgeSSH 应用，选择 **Configure**。
+3. 在 **Additional settings** 中找到 **Application Audience (AUD) Tag**。
+4. 复制完整值。
+
+Cloudflare 官方获取 AUD 的说明：
+https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/
+
+## 写入 Worker Secret
+
+在 EdgeSSH 项目目录运行：
+
+```bash
+npx wrangler secret put ACCESS_TEAM_DOMAIN
+npx wrangler secret put ACCESS_AUD
+```
+
+分别粘贴刚才取得的值。
+
+然后继续完成项目部署：
+
+```bash
+npx wrangler d1 migrations apply DB --remote
+npm run check
+npm run deploy
+```
+
+## 验证配置
+
+部署完成后建议检查：
+
+1. 未登录时访问正式域名，应先出现 Cloudflare Access，而不是直接进入 EdgeSSH。
+2. 不在 Allow 策略中的邮箱不能进入。
+3. 使用允许的邮箱登录后，可以正常加载主机列表和 `/api/auth/me`。
+4. 直接访问未受 Access 保护的入口，不应能够操作主机或建立 SSH 会话。
+5. 不要把 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`、Access Token 或登录 Cookie 提交到 Git 仓库。
+
+## 常见问题
+
+### 页面能打开，但 EdgeSSH 提示“管理员尚未配置 Zero Trust Access”
+
+检查：
+
+- `ACCESS_TEAM_DOMAIN` 是否已经通过 Wrangler Secret 写入。
+- Team Domain 是否为 `xxx.cloudflareaccess.com`，且没有 `https://`。
+- `ACCESS_AUD` 是否已经写入。
+
+### 登录后提示“Access 登录已失效”
+
+常见原因：
+
+- `ACCESS_AUD` 来自另一个 Access 应用。
+- `ACCESS_TEAM_DOMAIN` 属于另一个 Zero Trust 组织。
+- 你通过没有受对应 Access 应用保护的域名进入 Worker。
+
+### One-time PIN 收不到邮件
+
+先确认 Access Policy 中的 **Emails** 与登录邮箱完全一致。
+
+Cloudflare 对未被策略允许的邮箱不会发送验证码，但登录页面仍可能显示“验证码已发送”，以避免泄漏访问名单。邮件安全网关或链接扫描器也可能提前消耗验证码。
+
+---
+
+如果你已经有成熟的 Google / GitHub / Entra ID / Okta 等身份系统，可以继续使用现有 IdP；EdgeSSH 并不要求 One-time PIN。关键要求只有两个：
+
+- 用户必须先通过 Cloudflare Access 的身份认证与 Allow 策略。
+- EdgeSSH 中配置的 Team Domain 与 AUD 必须与这个 Access 应用一致。
