@@ -104,6 +104,18 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 - 自定义域名及 Cloudflare Zero Trust Access 应用。
 - 一台你有权访问的公网 SSH 服务器。
 
+### 配置 Cloudflare Zero Trust Access
+
+EdgeSSH 没有独立的本地登录系统，正式入口必须先经过 Cloudflare Zero Trust Access。首次部署时请先完成：
+
+1. 在 **Zero Trust > Access controls > Applications** 创建 **Self-hosted and private** 应用，并绑定 EdgeSSH 的自定义域名。
+2. 添加一条 **Allow** 策略，使用 **Include > Emails** 明确填写管理员邮箱；不要使用 `Everyone` 或 `Bypass`。
+3. 选择身份提供商。个人部署可使用 **One-time PIN**；新建 Zero Trust 组织若没有该选项，需要先到 **Integrations > Identity providers** 手动添加。
+4. 从 Access 应用中取得 **Application Audience (AUD) Tag**，并从 Zero Trust Settings 取得 Team Domain。
+5. 将它们分别写入 `ACCESS_AUD` 与 `ACCESS_TEAM_DOMAIN` Worker Secret。
+
+完整的控制台点击步骤、OTP 配置、参数获取和故障排查见 **[Cloudflare Zero Trust 配置指南](docs/ZERO_TRUST.md)**。
+
 ### 获取项目
 
 ```bash
