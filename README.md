@@ -109,7 +109,7 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 EdgeSSH 没有独立的本地登录系统，正式入口必须先经过 Cloudflare Zero Trust Access。首次部署时请先完成：
 
 1. 在 **Zero Trust > Access controls（访问控制）> Applications（应用程序）** 创建 **Self-hosted and private（自托管和私有）** 应用，并绑定 EdgeSSH 的自定义域名。
-2. 添加一条 **Allow（允许）** 策略，使用 **Include> Emails** 明确填写管理员邮箱；不要使用 `Everyone（所有人）` 或 `Bypass（绕过）`。
+2. 添加一条 **Allow（允许）** 策略，使用 **Include > Emails** 明确填写管理员邮箱；不要使用 `Everyone（所有人）` 或 `Bypass（绕过）`。
 3. 选择 **Identity Provider（标识提供程序）**。个人部署可使用 **One-time PIN（一次性 PIN）**；新建 Zero Trust 组织若没有该选项，需要先到 **Integrations（集成）> Identity providers（标识提供程序）** 手动添加。
 4. 从 Access 应用中取得 **Application Audience (AUD) Tag（应用程序受众 (AUD) 标签）**，并从 Zero Trust **Settings（设置）** 取得 **Team Domain（团队域）**。
 5. 将它们分别写入 `ACCESS_AUD` 与 `ACCESS_TEAM_DOMAIN` Worker Secret。
@@ -129,32 +129,24 @@ npm ci
 > [!IMPORTANT]
 > 本项目面向**单管理员**使用。Access 策略应仅允许管理员的明确身份，不要配置 Everyone 或 Bypass。缺少 Access 配置时，受保护 API 会拒绝访问，不会降级为匿名网关。
 
-1. 调整 `wrangler.toml` 中的 Worker 名称、自定义域名与 D1 绑定，**不要直接使用仓库中原部署环境的资源 ID**。
-2. 复用已有 D1 或创建自己的数据库，将其绑定为 `DB`，保留 Durable Object 类与迁移配置。
-3. 创建并配置 Access 应用，通过 Wrangler 注入下列 Secret。
-4. 应用数据库迁移，完成检查后部署。
+1. 在 Cloudflare 控制台复用或创建 D1 数据库，并调整 `wrangler.toml` 中的 Worker 名称、自定义域名与 D1 `database_id`，**不要直接使用仓库中原部署环境的资源 ID**。
+2. 在 Zero Trust 控制台创建 Self-hosted Access 应用，只允许管理员的明确邮箱或身份，并记下 Team Domain 与 Application Audience (AUD) Tag。
+3. 在 GitHub 配置一个 Actions Variable 和一个 Actions Secret，首次运行 `Deploy` workflow；它会自动检查项目、迁移 D1 并创建或更新 Worker。
+4. Worker 首次出现后，在 Cloudflare 控制台的 `Workers & Pages > 你的 Worker（默认 edgessh）> Settings > Variables and Secrets` 中添加三个运行时 Secret。保存并部署这些设置后即可通过 Access 入口验收。
 
-| 配置 | 用途 |
-| --- | --- |
-| `DB` | 保存加密主机资料的 D1 绑定 |
-| `SSH_SESSIONS` | 隔离 SSH 会话的 Durable Object 绑定 |
-| `ASSETS` | 提供前端静态资源 |
-| `ACCESS_TEAM_DOMAIN` | Access 团队域名，通过 Secret 注入 |
-| `ACCESS_AUD` | Access 应用 Audience，通过 Secret 注入 |
-| `ENCRYPTION_KEY` | 32 字节安全随机密钥的标准 Base64，通过 Secret 注入 |
-| `CONNECT_TIMEOUT_MS` | TCP 建连超时，默认 `10000` 毫秒 |
+| 配置 | 类型与位置 | 用途 |
+| --- | --- | --- |
+| `DB` | `wrangler.toml` 中的 D1 binding | 保存加密主机资料 |
+| `SSH_SESSIONS` | `wrangler.toml` 中的 Durable Object binding | 隔离 SSH 会话 |
+| `ASSETS` | `wrangler.toml` 中的静态资源 binding | 提供前端资源 |
+| `ACCESS_TEAM_DOMAIN` | Cloudflare Worker Secret | Access 团队域名，如 `my-team.cloudflareaccess.com`，不含协议和路径 |
+| `ACCESS_AUD` | Cloudflare Worker Secret | Access 应用的 Application Audience (AUD) Tag |
+| `ENCRYPTION_KEY` | Cloudflare Worker Secret | 32 字节安全随机密钥的标准 Base64 |
+| `CONNECT_TIMEOUT_MS` | 可选普通变量 | TCP 建连超时；仓库已设为 `10000`，通常无需填写 |
 
-```bash
-npx wrangler login
-npx wrangler secret put ACCESS_TEAM_DOMAIN
-npx wrangler secret put ACCESS_AUD
-npx wrangler secret put ENCRYPTION_KEY
-npx wrangler d1 migrations apply DB --remote
-npm run check
-npm run deploy
-```
+生产运行时只需在 Cloudflare 控制台填写 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 三个 Worker Secret。`DB`、`SSH_SESSIONS` 与 `ASSETS` 是部署时创建的绑定，不是环境变量；`CONNECT_TIMEOUT_MS` 已有默认配置，也无需重复添加。
 
-**首次部署才生成加密密钥，后续部署复用已有 Secret。** 丢失或直接替换密钥会导致已有资料无法解密。密钥不要写入源码、配置文件或提交记录。
+**首次部署才生成 `ENCRYPTION_KEY`，后续部署始终复用原值。** 丢失或直接替换密钥会导致已有资料无法解密。密钥只粘贴到 Cloudflare 的 Secret 输入框，不要写入源码、`wrangler.toml`、GitHub Actions 或提交记录。
 
 完整配置顺序、安全边界与验收清单见 [部署指南](DEPLOYMENT.md)。
 
@@ -167,7 +159,7 @@ npm run deploy
 | `CLOUDFLARE_ACCOUNT_ID` | Variable | Cloudflare 账户 ID |
 | `CLOUDFLARE_API_TOKEN` | Secret | 具备 Workers 部署和 D1 迁移权限的 API Token |
 
-Action 只需要这两项部署凭据。`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 继续作为 Worker Secret 保存在 Cloudflare，普通部署不会读取或覆盖它们。API Token 属于敏感信息，必须使用 GitHub Secret，不能保存为普通 Variable。
+Action 只需要这两项部署凭据。创建 API Token 时，可使用 Cloudflare 的 `Edit Cloudflare Workers` 模板并补充 `D1: Edit`，再将 Account 与 Zone Resources 限制到实际使用的账户和域名；该模板会覆盖 Worker 与自定义域名部署所需权限。`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 只保存在 Cloudflare Worker Secrets 中，普通部署不会读取或覆盖它们。API Token 属于敏感信息，必须使用 GitHub Secret，不能保存为普通 Variable。
 
 ## 本地开发
 
