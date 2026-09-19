@@ -22,6 +22,9 @@ Cloudflare 新建的 Zero Trust 组织目前不会自动添加 One-time PIN。�
 3. 在 **Your identity providers（您的标识提供程序）** 中选择 **Add new identity provider（添加新的标识提供程序）**。
 4. 选择 **One-time PIN（一次性 PIN）** 并保存。
 
+<img width="704" height="557" alt="image" src="https://github.com/user-attachments/assets/64d12f4d-4805-4b89-a46e-46f25dce1318" />
+
+
 Cloudflare 官方说明：
 https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/
 
