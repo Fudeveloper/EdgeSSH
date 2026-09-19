@@ -231,6 +231,11 @@ EdgeSSH/
 
 反馈时请附上复现步骤和必要的环境信息，**不要上传密码、私钥、Access Token 或未脱敏的日志**。
 
+## 贡献者
+
+- [CM / cmliu](https://github.com/cmliu)：原作者，完成项目的初始设计与核心实现。
+- [aozorae](https://github.com/aozorae)：当前维护者。
+
 ## 致谢
 
 - [Worker Web SSH / cmliu/CF-Workers-WebSSH](https://github.com/cmliu/CF-Workers-WebSSH)：本项目的直接上游与开发基础。
