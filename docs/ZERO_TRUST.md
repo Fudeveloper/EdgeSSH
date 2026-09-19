@@ -91,10 +91,8 @@ One-time PIN
 进入 Cloudflare Zero Trust 的 **Settings（设置）**，找到 **Team name（团队名称）/ Team domain（团队域）**。
 
 例如 Cloudflare 显示：
+<img width="730" height="583" alt="image" src="https://github.com/user-attachments/assets/6f095c14-5880-42b4-8850-4fc3d9b74386" />
 
-```text
-my-team.cloudflareaccess.com
-```
 
 则输入：
 
