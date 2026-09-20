@@ -1,8 +1,8 @@
-import { parseConnectMessage, type Env } from '../types';
-import { decryptHost, encryptHost } from './crypto';
-import { APIError, json, readJSON } from './http';
-import { locateHost, type HostLocation } from './location';
-import type { SystemInfo } from '../backend/system-info';
+import { parseConnectMessage, type Env } from '../types.ts';
+import { decryptHost, encryptHost } from './crypto.ts';
+import { APIError, json, readJSON } from './http.ts';
+import { locateHost, type HostLocation } from './location.ts';
+import type { SystemInfo } from '../backend/system-info.ts';
 
 export interface HostPayload {
   name: string;
@@ -82,6 +82,7 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
 }
 
 export async function hostsRoute(request: Request, env: Env, accountId: string, pathname: string): Promise<Response> {
+  if (!env.DB) throw new APIError('主机存储尚未配置，请检查 DB 绑定并执行 D1 migration。', 503);
   const match = /^\/api\/hosts(?:\/([a-f0-9-]{36})(?:\/(credentials|location|system))?)?$/.exec(pathname);
   if (!match) throw new APIError('接口不存在。', 404);
   const [, id, action] = match;

@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .wrangler/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+wrangler.deploy.toml
 coverage/
 *.log
 .dev.vars

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { encryptHost, decryptHost, base64 } from '../src/accounts/crypto.ts';
+import {
+  encryptHost,
+  decryptHost,
+  base64,
+  HostEncryptionKeyError,
+  HostPayloadDecryptionError,
+} from '../src/accounts/crypto.ts';
+import { apiFailure } from '../src/accounts/http.ts';
 
 const key = base64(crypto.getRandomValues(new Uint8Array(32)));
 
@@ -21,9 +28,23 @@ test('ciphertext is bound to both Access identity and host id', async () => {
 
 test('wrong keys, malformed secrets and tampered ciphertext fail closed', async () => {
   const encrypted = await encryptHost({ password: 'secret' }, key, 'owner', 'host');
-  await assert.rejects(decryptHost(encrypted, base64(crypto.getRandomValues(new Uint8Array(32))), 'owner', 'host'));
-  await assert.rejects(encryptHost({}, base64(new Uint8Array(16)), 'owner', 'host'));
+  await assert.rejects(
+    decryptHost(encrypted, base64(crypto.getRandomValues(new Uint8Array(32))), 'owner', 'host'),
+    HostPayloadDecryptionError,
+  );
+  await assert.rejects(encryptHost({}, base64(new Uint8Array(16)), 'owner', 'host'), HostEncryptionKeyError);
+  await assert.rejects(encryptHost({}, `${key.slice(0, -1)}A`, 'owner', 'host'), HostEncryptionKeyError);
   const parts = encrypted.split('.');
   parts[2] = (parts[2][0] === 'A' ? 'B' : 'A') + parts[2].slice(1);
-  await assert.rejects(decryptHost(parts.join('.'), key, 'owner', 'host'));
+  await assert.rejects(decryptHost(parts.join('.'), key, 'owner', 'host'), HostPayloadDecryptionError);
+});
+
+test('host storage failures return actionable errors without exposing internals', async () => {
+  const invalidKey = apiFailure(new HostEncryptionKeyError());
+  assert.equal(invalidKey.status, 503);
+  assert.deepEqual(await invalidKey.json(), { error: '主机存储尚未正确配置，请检查 ENCRYPTION_KEY。' });
+
+  const unreadablePayload = apiFailure(new HostPayloadDecryptionError());
+  assert.equal(unreadablePayload.status, 503);
+  assert.deepEqual(await unreadablePayload.json(), { error: '主机资料无法解密，请确认 ENCRYPTION_KEY 未被更换。' });
 });

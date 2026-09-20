@@ -8,10 +8,18 @@
     "dev": "wrangler dev",
     "dev:web": "vite --config vite.config.ts",
     "build:web": "vite build --config vite.config.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.frontend.json --noEmit",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
-    "check": "npm run typecheck && npm run test && wrangler deploy --dry-run --outdir .wrangler/build",
-    "deploy": "wrangler deploy"
+    "check": "npm run typecheck && npm run test && npm run docs:build && wrangler deploy --dry-run --outdir .wrangler/build",
+    "prepare:docs": "node scripts/prepare-pages-project.mjs",
+    "deploy:docs": "npm run docs:build && node scripts/prepare-pages-project.mjs --deploy",
+    "prepare:deploy": "node scripts/prepare-deployment.mjs",
+    "deploy:secrets": "node scripts/sync-worker-secrets.mjs",
+    "deploy:worker": "wrangler d1 migrations apply DB --remote --config wrangler.deploy.toml && wrangler deploy --config wrangler.deploy.toml",
+    "deploy": "npm run prepare:deploy && npm run deploy:secrets && npm run deploy:worker"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -26,6 +34,7 @@
     "flag-icons": "^7.5.0",
     "typescript": "^5.9.2",
     "vite": "^7.0.6",
+    "vitepress": "^1.6.4",
     "wrangler": "^4.134.0"
   },
   "engines": {

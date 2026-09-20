@@ -1,5 +1,8 @@
 const encoder = new TextEncoder();
 
+export class HostEncryptionKeyError extends Error {}
+export class HostPayloadDecryptionError extends Error {}
+
 export function base64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
@@ -13,8 +16,13 @@ export async function digest(value: string): Promise<string> {
 }
 
 async function encryptionKey(secret: string): Promise<CryptoKey> {
-  const key = unbase64(secret);
-  if (key.length !== 32) throw new Error('ENCRYPTION_KEY must be 32 bytes encoded as base64');
+  let key: Uint8Array<ArrayBuffer>;
+  try {
+    key = unbase64(secret);
+  } catch {
+    throw new HostEncryptionKeyError();
+  }
+  if (key.length !== 32 || base64(key) !== secret) throw new HostEncryptionKeyError();
   return crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
@@ -31,10 +39,15 @@ export async function encryptHost(value: unknown, secret: string, accountId: str
 }
 
 export async function decryptHost<T>(value: string, secret: string, accountId: string, hostId: string): Promise<T> {
-  const [version, iv, ciphertext] = value.split('.');
-  if (version !== 'v1') throw new Error('Unsupported ciphertext version');
-  const plaintext = await crypto.subtle.decrypt({
-    name: 'AES-GCM', iv: unbase64(iv), additionalData: encoder.encode(`edgessh:v1:${accountId}:${hostId}`),
-  }, await encryptionKey(secret), unbase64(ciphertext));
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  try {
+    const [version, iv, ciphertext] = value.split('.');
+    if (version !== 'v1') throw new HostPayloadDecryptionError();
+    const plaintext = await crypto.subtle.decrypt({
+      name: 'AES-GCM', iv: unbase64(iv), additionalData: encoder.encode(`edgessh:v1:${accountId}:${hostId}`),
+    }, await encryptionKey(secret), unbase64(ciphertext));
+    return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  } catch (error) {
+    if (error instanceof HostEncryptionKeyError) throw error;
+    throw new HostPayloadDecryptionError();
+  }
 }
