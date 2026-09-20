@@ -35,16 +35,18 @@ https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers
 3. 选择 **自托管和私有应用（Self-hosted and private）**。
 4. 选择 **添加公共主机名（Add public hostname）**。
 5. **应用程序名称（Application name）** 可填写 `EdgeSSH`。
-6. **公共主机名（Public hostname）** 选择 EdgeSSH 实际使用的自定义域名，例如：
+6. **公共主机名（Public hostname）** 填写 EdgeSSH 实际使用的入口。默认可以直接使用 Worker 自带域名：
 
    ```text
-   ssh.example.com
+   edgessh.<你的 Workers 子域>.workers.dev
    ```
 
-7. 不要把另一个无关域名，或未受保护的 `workers.dev` 地址当作正式入口。
+   如果在 GitHub Actions 中设置了 `CUSTOM_DOMAIN`，也可以改填对应的自定义域名，例如 `ssh.example.com`。自定义域名不是部署必需项。
+
+7. `workers.dev` 与自定义域名都可以作为正式入口，但必须在这里保护实际使用的 hostname。不要把另一个无关域名或未受保护的地址当作入口。
 
 Cloudflare 官方说明：
-https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/
+https://developers.cloudflare.com/workers/configuration/cloudflare-access/
 
 ### 3. 添加身份访问策略
 
@@ -82,7 +84,7 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/policies/
 
 如果只启用一个标识提供程序，也可以开启 Cloudflare 的**应用即时身份验证（Apply instant authentication）**，让用户直接进入对应登录流程。
 
-保存应用后，先打开 EdgeSSH 的自定义域名测试一次。正确情况下，浏览器会先进入 Cloudflare Access 登录，再进入 EdgeSSH。
+保存应用后，先打开 EdgeSSH 的实际入口测试一次。正确情况下，无论入口是 `workers.dev` 还是自定义域名，浏览器都会先进入 Cloudflare Access 登录，再进入 EdgeSSH。
 
 ## 获取 EdgeSSH 需要的两个 Access 参数
 
@@ -113,26 +115,23 @@ my-team.cloudflareaccess.com
 Cloudflare 官方获取 AUD 的说明：
 https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/
 
-## 在 Cloudflare 控制台保存 Worker 机密（Secret）
+## 在 GitHub Actions 保存 Worker 机密（Secret）
 
-先按 [部署指南](../DEPLOYMENT.md) 配置 GitHub Actions，并手动运行一次 `Deploy` 工作流（workflow）。首次部署完成、Worker 出现在 Cloudflare 后：
+按 [部署指南](../DEPLOYMENT.md) 打开 GitHub 仓库的**设置（Settings）> 机密和变量（Secrets and variables）> Actions**，将以下值添加为仓库机密（Repository secrets）：
 
-1. 打开 Cloudflare 控制面板（Dashboard），进入 **Workers 与 Pages（Workers & Pages）**。
-2. 选择你的 EdgeSSH Worker（默认名称为 `edgessh`）。
-3. 进入**设置（Settings）> 变量与机密（Variables and Secrets）**。
-4. 添加 `ACCESS_TEAM_DOMAIN`，类型选择**机密（Secret）**，粘贴前面取得的团队域（Team Domain）。
-5. 添加 `ACCESS_AUD`，类型选择**机密（Secret）**，粘贴前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag）。
-6. 按控制台提示保存并部署新版本。
+1. `ACCESS_TEAM_DOMAIN`：前面取得的团队域（Team Domain）。
+2. `ACCESS_AUD`：前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag）。
+3. `ENCRYPTION_KEY`：32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用。
 
-不要把这两个值保存为 GitHub Actions 机密（Secret）。GitHub Actions 只需要 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN` 两项部署凭据；Access 参数属于 Worker 运行时机密（Secret），应始终留在 Cloudflare 中。
+`Deploy` 工作流会先校验这三个值，再通过标准输入同步为 Cloudflare Worker 机密（Secret）。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。
 
-EdgeSSH 还需要一个 `ENCRYPTION_KEY` Worker 机密（Secret）。它与上述两项在同一个控制台页面配置，生成要求和密钥保管注意事项见[部署指南](../DEPLOYMENT.md#worker-runtime-secrets)。生产部署不需要在本地执行 Wrangler 机密（Secret）或 Worker 部署命令。
+`ENCRYPTION_KEY` 的生成要求和保管注意事项见[部署指南](../DEPLOYMENT.md#worker-runtime-secrets)。生产部署不需要在本地执行 Wrangler 机密（Secret）或 Worker 部署命令。
 
 ## 验证配置
 
 部署完成后建议检查：
 
-1. 未登录时访问正式域名，应先出现 Cloudflare Access，而不是直接进入 EdgeSSH。
+1. 未登录时访问实际入口，应先出现 Cloudflare Access，而不是直接进入 EdgeSSH。
 2. 不在允许（Allow）策略中的邮箱不能进入。
 3. 使用允许的邮箱登录后，可以正常加载主机列表和 `/api/auth/me`。
 4. 直接访问未受 Access 保护的入口，不应能够操作主机或建立 SSH 会话。
@@ -144,9 +143,9 @@ EdgeSSH 还需要一个 `ENCRYPTION_KEY` Worker 机密（Secret）。它与上�
 
 检查：
 
-- `ACCESS_TEAM_DOMAIN` 是否已经在 Worker 的**变量与机密（Variables and Secrets）**页面保存为**机密（Secret）**，并部署到当前版本。
+- GitHub Actions 中的 `ACCESS_TEAM_DOMAIN` 是否配置正确，以及最近一次 `Deploy` 工作流是否已成功将它同步到当前 Worker 版本。普通部署无需在 Worker 控制台手工重复保存。
 - 团队域（Team Domain）是否为 `xxx.cloudflareaccess.com`，且没有 `https://`。
-- `ACCESS_AUD` 是否已在同一页面保存为**机密（Secret）**，且值来自当前 Access 应用。
+- GitHub Actions 中的 `ACCESS_AUD` 是否来自当前 Access 应用，以及最近一次 `Deploy` 工作流是否同步成功。
 
 ### 登录后提示“Access 登录已失效”
 
