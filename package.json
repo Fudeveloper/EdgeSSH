@@ -8,10 +8,11 @@
     "dev": "wrangler dev",
     "dev:web": "vite --config vite.config.ts",
     "build:web": "vite build --config vite.config.ts",
-    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.frontend.json --noEmit",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.frontend.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "check": "npm run typecheck && npm run test && wrangler deploy --dry-run --outdir .wrangler/build",
-    "deploy": "wrangler deploy"
+    "deploy:validate": "node --experimental-strip-types scripts/deploy.ts --validate-only",
+    "deploy": "node --experimental-strip-types scripts/deploy.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -23,7 +24,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260727.1",
+    "@types/node": "^22.20.4",
     "flag-icons": "^7.5.0",
+    "smol-toml": "^1.8.0",
     "typescript": "^5.9.2",
     "vite": "^7.0.6",
     "wrangler": "^4.134.0"

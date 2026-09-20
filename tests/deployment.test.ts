@@ -1,0 +1,189 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { test } from 'node:test';
+import { parse, stringify } from 'smol-toml';
+import { ensureDatabase } from '../scripts/cloudflare-d1.ts';
+import { createDeploymentConfig, readDeploymentSettings } from '../scripts/deployment-config.ts';
+
+const templateText = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+const template = parse(templateText);
+const env = {
+  CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32),
+  CLOUDFLARE_API_TOKEN: 'test-token-not-a-real-credential',
+  ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
+  ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+  ACCESS_AUD: 'test-audience',
+};
+const settings = readDeploymentSettings(template, env);
+const database = { uuid: '00000000-0000-4000-8000-000000000001', name: 'edgessh-accounts' };
+
+function json(result: unknown, success = true): Response {
+  return Response.json({ success, result });
+}
+
+test('public template contains no account, database ID, custom domain or runtime secrets', () => {
+  assert.equal(template.account_id, undefined);
+  assert.equal(template.routes, undefined);
+  assert.equal(template.workers_dev, true);
+  assert.deepEqual(template.d1_databases, [{
+    binding: 'DB', database_name: 'edgessh-accounts', migrations_dir: 'migrations',
+  }]);
+  assert.deepEqual(template.vars, { CONNECT_TIMEOUT_MS: '10000' });
+});
+
+test('generated config preserves application bindings and paths without persisting secrets', () => {
+  const before = structuredClone(template);
+  const config = createDeploymentConfig(template, settings, database);
+  assert.equal(config.account_id, env.CLOUDFLARE_ACCOUNT_ID);
+  assert.equal(config.name, 'edgessh');
+  assert.deepEqual(config.d1_databases, [{
+    binding: 'DB', database_name: database.name, database_id: database.uuid, migrations_dir: 'migrations',
+  }]);
+  for (const key of ['main', 'assets', 'build', 'migrations', 'durable_objects']) {
+    assert.deepEqual(config[key], template[key]);
+  }
+  const serialized = stringify(config);
+  for (const value of [env.CLOUDFLARE_API_TOKEN, ...Object.values(settings.secrets)]) {
+    assert.equal(serialized.includes(value), false);
+  }
+  assert.deepEqual(parse(serialized), config);
+  assert.deepEqual(template, before);
+});
+
+test('worker, database and custom domain can be configured for another account', () => {
+  const custom = readDeploymentSettings(template, {
+    ...env, CLOUDFLARE_ACCOUNT_ID: 'b'.repeat(32), WORKER_NAME: 'my-ssh', CUSTOM_DOMAIN: 'ssh.example.com',
+  });
+  assert.equal(custom.databaseName, 'my-ssh-accounts');
+  const config = createDeploymentConfig(template, custom, { ...database, name: custom.databaseName });
+  assert.equal(config.name, 'my-ssh');
+  assert.equal(config.account_id, 'b'.repeat(32));
+  assert.deepEqual(config.routes, [{ pattern: 'ssh.example.com', custom_domain: true }]);
+});
+
+test('explicit database settings and manually configured template values are respected', () => {
+  const custom = readDeploymentSettings(template, {
+    ...env, WORKER_NAME: 'another-worker', D1_DATABASE_NAME: 'shared-data', D1_DATABASE_ID: database.uuid,
+  });
+  assert.equal(custom.databaseName, 'shared-data');
+  assert.equal(custom.databaseId, database.uuid);
+  const manualTemplate = {
+    ...template,
+    routes: [{ pattern: 'manual.example.com', custom_domain: true }],
+    d1_databases: [{ binding: 'DB', database_name: database.name, database_id: database.uuid }],
+  };
+  const manual = readDeploymentSettings(manualTemplate, env);
+  assert.equal(manual.databaseId, database.uuid);
+  assert.deepEqual(createDeploymentConfig(manualTemplate, manual, database).routes, manualTemplate.routes);
+});
+
+test('missing deployment settings fail before provisioning and do not reveal values', () => {
+  assert.throws(() => readDeploymentSettings(template, {}), /CLOUDFLARE_ACCOUNT_ID.*ENCRYPTION_KEY.*ACCESS_AUD/);
+  assert.throws(() => readDeploymentSettings(template, { ...env, ACCESS_AUD: ' ' }), /ACCESS_AUD/);
+});
+
+test('invalid account, resource, domain and runtime configuration fail validation', () => {
+  for (const [name, value] of Object.entries({
+    CLOUDFLARE_ACCOUNT_ID: 'wrong-account',
+    WORKER_NAME: 'invalid worker name',
+    D1_DATABASE_NAME: '../invalid-name',
+    D1_DATABASE_ID: 'wrong-database-id',
+    CUSTOM_DOMAIN: 'https://ssh.example.com/path',
+    ENCRYPTION_KEY: Buffer.alloc(16).toString('base64'),
+    ACCESS_TEAM_DOMAIN: 'https://example.cloudflareaccess.com',
+  })) {
+    assert.throws(() => readDeploymentSettings(template, { ...env, [name]: value }), new RegExp(name));
+  }
+  assert.throws(() => readDeploymentSettings(template, { ...env, ENCRYPTION_KEY: `${env.ENCRYPTION_KEY}!` }), /ENCRYPTION_KEY/);
+  assert.throws(() => readDeploymentSettings(template, { ...env, ENCRYPTION_KEY: `${env.ENCRYPTION_KEY}==` }), /ENCRYPTION_KEY/);
+  assert.throws(() => readDeploymentSettings({
+    ...template, vars: { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
+  }, env), /Secret/);
+});
+
+test('database lookup reuses an existing database without any writes', async () => {
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    calls.push(String(input));
+    assert.equal(init?.method, 'GET');
+    assert.equal((init?.headers as Record<string, string>).Authorization, `Bearer ${env.CLOUDFLARE_API_TOKEN}`);
+    return json([database]);
+  };
+  assert.deepEqual(await ensureDatabase(settings, fetcher), database);
+  assert.deepEqual(calls, [`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database?per_page=100&page=1`]);
+});
+
+test('database lookup searches later pages before creating resources', async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = async (input, init) => {
+    calls++;
+    assert.equal(init?.method, 'GET');
+    assert.equal(new URL(String(input)).searchParams.get('page'), String(calls));
+    return json(calls === 1
+      ? Array.from({ length: 100 }, (_, index) => ({ uuid: String(index), name: `other-${index}` }))
+      : [database]);
+  };
+  assert.deepEqual(await ensureDatabase(settings, fetcher), database);
+  assert.equal(calls, 2);
+});
+
+test('first deployment creates once and subsequent deployment reuses the database', async () => {
+  let created = false;
+  let writes = 0;
+  const fetcher: typeof fetch = async (_input, init) => {
+    if (init?.method === 'GET') return json(created ? [database] : []);
+    assert.equal(init?.method, 'POST');
+    assert.deepEqual(JSON.parse(String(init.body)), { name: database.name });
+    writes++;
+    created = true;
+    return json(database);
+  };
+  assert.deepEqual(await ensureDatabase(settings, fetcher), database);
+  assert.deepEqual(await ensureDatabase(settings, fetcher), database);
+  assert.equal(writes, 1);
+});
+
+test('explicit ID is verified within the target account and uses the returned database name', async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    assert.equal(String(input), `https://api.cloudflare.com/client/v4/accounts/${settings.accountId}/d1/database/${database.uuid}`);
+    assert.equal(init?.method, 'GET');
+    return json({ ...database, name: 'existing-database' });
+  };
+  const resolved = await ensureDatabase({ ...settings, databaseId: database.uuid }, fetcher);
+  assert.equal(resolved.name, 'existing-database');
+  assert.deepEqual(createDeploymentConfig(template, settings, resolved).d1_databases, [{
+    binding: 'DB', database_name: 'existing-database', database_id: database.uuid, migrations_dir: 'migrations',
+  }]);
+});
+
+test('invalid explicit ID or denied API access never falls back to creating an empty database', async () => {
+  for (const status of [403, 404, 500]) {
+    let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      return new Response('private upstream details', { status });
+    };
+    await assert.rejects(ensureDatabase({ ...settings, databaseId: database.uuid }, fetcher), (error: Error) => {
+      assert.match(error.message, new RegExp(`HTTP ${status}`));
+      assert.equal(error.message.includes('private upstream details'), false);
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('unsuccessful API envelope aborts resource preparation', async () => {
+  const fetcher: typeof fetch = async () => json(null, false);
+  await assert.rejects(ensureDatabase(settings, fetcher), /未成功/);
+});
+
+test('Actions supplies runtime secrets from Secrets and uses the shared deploy entry point', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  for (const name of ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD']) {
+    assert.ok(workflow.includes(`${name}: \${{ secrets.${name} }}`));
+    assert.equal(workflow.includes(`vars.${name}`), false);
+  }
+  assert.ok(workflow.includes('run: npm run deploy:validate'));
+  assert.ok(workflow.includes('run: npm run deploy\n'));
+  assert.equal(workflow.includes('wrangler d1 migrations apply'), false);
+});

@@ -11,3 +11,4 @@ AGENTS.md
 deliverables/
 frontend/dist-*
 scripts-tmp/
+.wrangler.generated.toml
