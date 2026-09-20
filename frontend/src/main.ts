@@ -13,7 +13,6 @@ import { resetTerminalForConnection } from './terminal-session';
 import { WebSocketReconnectManager } from './ws-reconnect';
 import type { ReconnectLogEntry } from './ws-reconnect';
 import './style.css';
-import './workspace-theme.css';
 
 type AuthMethod = 'password' | 'publickey';
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnecting' | 'error';

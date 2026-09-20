@@ -4,6 +4,10 @@ compatibility_date = "2026-07-01"
 workers_dev = true
 preview_urls = false
 
+routes = [
+  { pattern = "ssh.dltwcnm.ccwu.cc", custom_domain = true }
+]
+
 [build]
 command = "npm run build:web"
 
@@ -27,5 +31,5 @@ new_sqlite_classes = ["SSHSessionDO"]
 [[d1_databases]]
 binding = "DB"
 database_name = "edgessh-accounts"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "2c1b7a95-a5d6-4a72-a8d2-4132b74aa268"
 migrations_dir = "migrations"

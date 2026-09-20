@@ -1,13 +1,7 @@
-import { jsonError, secureResponse } from '../http-security.ts';
-import { HostEncryptionKeyError, HostPayloadDecryptionError } from './crypto.ts';
+import { jsonError, secureResponse } from '../http-security';
 
 export class APIError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
+  constructor(message: string, readonly status = 400) { super(message); }
 }
 
 export function json(value: unknown, status = 200, headers?: HeadersInit): Response {
@@ -40,8 +34,5 @@ export async function readJSON(request: Request, maxBytes = 160 * 1024): Promise
 }
 
 export function apiFailure(error: unknown): Response {
-  if (error instanceof APIError) return jsonError(error.message, error.status);
-  if (error instanceof HostEncryptionKeyError) return jsonError('主机存储尚未正确配置，请检查 ENCRYPTION_KEY。', 503);
-  if (error instanceof HostPayloadDecryptionError) return jsonError('主机资料无法解密，请确认 ENCRYPTION_KEY 未被更换。', 503);
-  return jsonError('服务暂时不可用，请稍后重试。', 500);
+  return error instanceof APIError ? jsonError(error.message, error.status) : jsonError('服务暂时不可用，请稍后重试。', 500);
 }

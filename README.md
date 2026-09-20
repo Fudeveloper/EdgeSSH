@@ -16,7 +16,7 @@
   <img alt="Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-546E7A?style=flat-square">
 </p>
 
-[文档网站](https://edgessh-docs.pages.dev) · [Actions 部署](https://edgessh-docs.pages.dev/deploy/actions) · [功能特性](#功能特性) · [界面预览](#界面预览) · [本地开发](#本地开发) · [安全与限制](#安全与限制)
+[功能特性](#功能特性) · [界面预览](#界面预览) · [快速开始](#快速开始) · [本地开发](#本地开发) · [安全与限制](#安全与限制)
 
 </div>
 
@@ -31,18 +31,6 @@
 <sub>演示数据使用保留地址，不对应任何真实服务器。</sub>
 
 </div>
-
-<table width="100%">
-  <tr>
-    <td>
-      <strong>EdgeChat</strong><br>
-      <sub>基于 Cloudflare 的开源自部署团队聊天系统</sub>
-    </td>
-    <td align="right">
-      <a href="https://github.com/aozorae/Edgechat"><strong>查看开源项目 →</strong></a>
-    </td>
-  </tr>
-</table>
 
 ## 功能特性
 
@@ -124,9 +112,9 @@ EdgeSSH 没有独立的本地登录系统，正式入口必须先经过 Cloudfla
 2. 添加一条 **Allow（允许）** 策略，使用 **Include > Emails** 明确填写管理员邮箱；不要使用 `Everyone（所有人）` 或 `Bypass（绕过）`。
 3. 选择 **Identity Provider（标识提供程序）**。个人部署可使用 **One-time PIN（一次性 PIN）**；新建 Zero Trust 组织若没有该选项，需要先到 **Integrations（集成）> Identity providers（标识提供程序）** 手动添加。
 4. 从 Access 应用中取得 **Application Audience (AUD) Tag（应用程序受众 (AUD) 标签）**，并从 Zero Trust **Settings（设置）** 取得 **Team Domain（团队域）**。
-5. 将它们分别保存为 GitHub Actions Secret `ACCESS_AUD` 与 `ACCESS_TEAM_DOMAIN`，由 `Deploy` workflow 同步为 Worker Secret。
+5. 将它们分别写入 `ACCESS_AUD` 与 `ACCESS_TEAM_DOMAIN` Worker Secret。
 
-完整的控制台点击步骤、OTP 配置、参数获取和故障排查见 **[Cloudflare Zero Trust 配置指南](https://edgessh-docs.pages.dev/deploy/zero-trust)**。
+完整的控制台点击步骤、OTP 配置、参数获取和故障排查见 **[Cloudflare Zero Trust 配置指南](docs/ZERO_TRUST.md)**。
 
 ### 获取项目
 
@@ -141,62 +129,37 @@ npm ci
 > [!IMPORTANT]
 > 本项目面向**单管理员**使用。Access 策略应仅允许管理员的明确身份，不要配置 Everyone 或 Bypass。缺少 Access 配置时，受保护 API 会拒绝访问，不会降级为匿名网关。
 
-1. 在 GitHub Actions 配置 Cloudflare 账户 ID、API Token 和三项运行时 Secret；Worker 名称、D1 名称与自定义域名通过仓库 Variable 设置，不需要修改 `wrangler.toml`。
-2. 若使用自定义域名，在 Zero Trust 控制台为同一域名创建 Self-hosted Access 应用，只允许管理员的明确邮箱或身份，并记下 Team Domain 与 Application Audience (AUD) Tag。
-3. 手动运行一次 `Deploy` workflow。它会按名称查找 D1，不存在时自动创建，通过 Wrangler 同步运行时 Secret，随后执行 migration 并创建或更新 Worker；以后推送到 `main` 会复用同一资源更新部署。
-4. 通过 Access 入口登录并完成验收；无需再进入 Worker 控制台补填环境变量。
+1. 在 Cloudflare 控制台复用或创建 D1 数据库，并调整 `wrangler.toml` 中的 Worker 名称、自定义域名与 D1 `database_id`，**不要直接使用仓库中原部署环境的资源 ID**。
+2. 在 Zero Trust 控制台创建 Self-hosted Access 应用，只允许管理员的明确邮箱或身份，并记下 Team Domain 与 Application Audience (AUD) Tag。
+3. 在 GitHub 配置一个 Actions Variable 和一个 Actions Secret，首次运行 `Deploy` workflow；它会自动检查项目、迁移 D1 并创建或更新 Worker。
+4. Worker 首次出现后，在 Cloudflare 控制台的 `Workers & Pages > 你的 Worker（默认 edgessh）> Settings > Variables and Secrets` 中添加三个运行时 Secret。保存并部署这些设置后即可通过 Access 入口验收。
 
 | 配置 | 类型与位置 | 用途 |
 | --- | --- | --- |
-| `DB` | 部署时生成的 D1 binding | 保存加密主机资料；数据库首次自动创建、后续按名称复用 |
+| `DB` | `wrangler.toml` 中的 D1 binding | 保存加密主机资料 |
 | `SSH_SESSIONS` | `wrangler.toml` 中的 Durable Object binding | 隔离 SSH 会话 |
 | `ASSETS` | `wrangler.toml` 中的静态资源 binding | 提供前端资源 |
-| `ACCESS_TEAM_DOMAIN` | GitHub Actions Secret，同步为 Worker Secret | Access 团队域名，如 `my-team.cloudflareaccess.com`，不含协议和路径 |
-| `ACCESS_AUD` | GitHub Actions Secret，同步为 Worker Secret | Access 应用的 Application Audience (AUD) Tag |
-| `ENCRYPTION_KEY` | GitHub Actions Secret，同步为 Worker Secret | 32 字节安全随机密钥的标准 Base64 |
+| `ACCESS_TEAM_DOMAIN` | Cloudflare Worker Secret | Access 团队域名，如 `my-team.cloudflareaccess.com`，不含协议和路径 |
+| `ACCESS_AUD` | Cloudflare Worker Secret | Access 应用的 Application Audience (AUD) Tag |
+| `ENCRYPTION_KEY` | Cloudflare Worker Secret | 32 字节安全随机密钥的标准 Base64 |
 | `CONNECT_TIMEOUT_MS` | 可选普通变量 | TCP 建连超时；仓库已设为 `10000`，通常无需填写 |
 
-生产运行时的 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 统一保存在 GitHub Actions Secrets 中，workflow 会在部署时将它们同步为 Worker Secret。`DB`、`SSH_SESSIONS` 与 `ASSETS` 是部署生成的绑定，不是环境变量；其中 D1 数据库资源由 workflow 单独确保存在。`CONNECT_TIMEOUT_MS` 已有默认配置，也无需重复添加。
+生产运行时只需在 Cloudflare 控制台填写 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 三个 Worker Secret。`DB`、`SSH_SESSIONS` 与 `ASSETS` 是部署时创建的绑定，不是环境变量；`CONNECT_TIMEOUT_MS` 已有默认配置，也无需重复添加。
 
-**首次部署才生成 `ENCRYPTION_KEY`，后续部署始终复用同一个 GitHub Secret。** 丢失或直接替换密钥会导致已有资料无法解密。不要把密钥保存为 GitHub Variable，也不要写入源码、`wrangler.toml`、日志或提交记录。
+**首次部署才生成 `ENCRYPTION_KEY`，后续部署始终复用原值。** 丢失或直接替换密钥会导致已有资料无法解密。密钥只粘贴到 Cloudflare 的 Secret 输入框，不要写入源码、`wrangler.toml`、GitHub Actions 或提交记录。
 
-完整配置顺序、安全边界与验收清单见 [VitePress 部署指南](https://edgessh-docs.pages.dev/deploy/actions)。
+完整配置顺序、安全边界与验收清单见 [部署指南](DEPLOYMENT.md)。
 
 ### GitHub Actions 自动部署
 
-仓库内置的 `Deploy` workflow 会在推送到 `main` 后自动检查、准备 D1、执行 migration 并部署，也可在 Actions 页面手动触发。首次使用前，在仓库的 `Settings > Secrets and variables > Actions` 中配置：
+仓库内置的 `Deploy` workflow 会在推送到 `main` 后自动检查、迁移 D1 并部署，也可在 Actions 页面手动触发。首次使用前，在仓库的 `Settings > Secrets and variables > Actions` 中配置：
 
-#### 用户需要填写的内容
-
-使用自定义域名完成正式部署时，用户一共需要在 GitHub Actions 中填写 **6 个值**：2 个 Variable 和 4 个 Secret。
-
-| 名称 | 填写位置 | 内容 |
+| 名称 | GitHub 配置类型 | 用途 |
 | --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions Variable | Cloudflare 账户 ID |
-| `CUSTOM_DOMAIN` | GitHub Actions Variable | 自定义域名的纯主机名，例如 `ssh.example.com` |
-| `CLOUDFLARE_API_TOKEN` | GitHub Actions Secret | 具备 Workers、D1 Edit 和目标 Zone 权限的 API Token |
-| `ACCESS_TEAM_DOMAIN` | GitHub Actions Secret | Zero Trust Team Domain，不含协议和路径 |
-| `ACCESS_AUD` | GitHub Actions Secret | Access 应用的 Application Audience (AUD) Tag |
-| `ENCRYPTION_KEY` | GitHub Actions Secret | 32 字节安全随机数的标准 Base64 |
+| `CLOUDFLARE_ACCOUNT_ID` | Variable | Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | Secret | 具备 Workers 部署和 D1 迁移权限的 API Token |
 
-#### 可选配置
-
-| 名称 | 类型 | 默认值 |
-| --- | --- | --- |
-| `WORKER_NAME` | GitHub Actions Variable | `edgessh` |
-| `D1_DATABASE_NAME` | GitHub Actions Variable | `<WORKER_NAME>-accounts` |
-
-这两个名称通常保持默认值即可，不计入上述 6 个必填值。用户不需要填写 D1 ID、手动创建数据库、进入 Worker 控制台保存 Secret 或修改 `wrangler.toml`。
-
-完整操作顺序：
-
-1. Fork 仓库，并确保准备使用的自定义域名已经接入 Cloudflare。
-2. 创建部署用 API Token，在 GitHub 填写 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_API_TOKEN` 与 `CUSTOM_DOMAIN`。
-3. 在 Zero Trust 创建绑定同一域名的 Self-hosted Access 应用，只允许管理员身份，并取得 Team Domain 与 AUD；生成一次加密密钥，然后将 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 保存为 GitHub Actions Secret。
-4. 在 GitHub 的 `Actions > Deploy` 手动运行一次 workflow；它会自动创建或复用 D1、同步 Worker Secret、执行 migration、创建或更新 Worker，并绑定自定义域名。
-5. 访问自定义域名，通过 Access 登录并完成账号 API 与 SSH 功能验收。以后推送到 `main` 会自动复用现有资源更新部署。
-
-标准部署要求上表 6 项全部填写。创建 API Token 时，可使用 Cloudflare 的 `Edit Cloudflare Workers` 模板并补充 `D1: Edit`，再将 Account 与 Zone Resources 限制到实际使用的账户和域名。workflow 不会把解析出的数据库 ID 或 Secret 写回仓库：数据库 ID 只进入 runner 内的临时配置，Secret 只经标准输入交给 Wrangler。部署、D1 初始化与运行时 Secret 同步均由 Action 完成，不需要进入 Cloudflare Worker 控制台手工发布或维护另一套 Secret。
+Action 只需要这两项部署凭据。创建 API Token 时，可使用 Cloudflare 的 `Edit Cloudflare Workers` 模板并补充 `D1: Edit`，再将 Account 与 Zone Resources 限制到实际使用的账户和域名；该模板会覆盖 Worker 与自定义域名部署所需权限。`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 只保存在 Cloudflare Worker Secrets 中，普通部署不会读取或覆盖它们。API Token 属于敏感信息，必须使用 GitHub Secret，不能保存为普通 Variable。
 
 ## 本地开发
 

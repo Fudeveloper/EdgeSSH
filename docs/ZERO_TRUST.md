@@ -113,16 +113,20 @@ my-team.cloudflareaccess.com
 Cloudflare 官方获取 AUD 的说明：
 https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/
 
-## 在 GitHub Actions 保存 Worker Secret
+## 在 Cloudflare 控制台保存 Worker Secret
 
-取得 Team Domain 与 AUD 后，在 GitHub 仓库进入 `Settings > Secrets and variables > Actions`：
+先按 [部署指南](../DEPLOYMENT.md) 配置 GitHub Actions，并手动运行一次 `Deploy` workflow。首次部署完成、Worker 出现在 Cloudflare 后：
 
-1. 添加 `ACCESS_TEAM_DOMAIN` Secret，粘贴前面取得的 Team Domain。
-2. 添加 `ACCESS_AUD` Secret，粘贴前面取得的 Application Audience (AUD) Tag。
-3. 添加 `ENCRYPTION_KEY` Secret。按照[运行时 Secret 指南](https://edgessh-docs.pages.dev/deploy/runtime-secrets#生成-encryption_key)生成 32 字节安全随机数的标准 Base64；首次生成后必须妥善保管，后续部署继续使用同一个值。
-4. 确认三项 Secret 均已添加，再手动运行一次 `Deploy` workflow。
+1. 打开 Cloudflare Dashboard，进入 `Workers & Pages`。
+2. 选择你的 EdgeSSH Worker（默认名称为 `edgessh`）。
+3. 进入 `Settings（设置）> Variables and Secrets（变量与机密）`。
+4. 添加 `ACCESS_TEAM_DOMAIN`，类型选择 **Secret**，粘贴前面取得的 Team Domain。
+5. 添加 `ACCESS_AUD`，类型选择 **Secret**，粘贴前面取得的 Application Audience (AUD) Tag。
+6. 按控制台提示保存并部署新版本。
 
-workflow 会通过 Wrangler 将这三项值同步为同名 Worker Secret。不要将它们保存成 GitHub Actions Variable，也不要写进仓库、本地命令或日志；生产部署不需要手动执行 Wrangler Secret 或 Worker 部署命令。
+不要把这两个值保存为 GitHub Actions Secret。GitHub Actions 只需要 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN` 两项部署凭据；Access 参数属于 Worker 运行时 Secret，应始终留在 Cloudflare 中。
+
+EdgeSSH 还需要一个 `ENCRYPTION_KEY` Worker Secret。它与上述两项在同一个控制台页面配置，生成要求和密钥保管注意事项见 [部署指南](../DEPLOYMENT.md#5-在-worker-界面添加运行时-secret)。生产部署不需要在本地执行 Wrangler Secret 或 Worker 部署命令。
 
 ## 验证配置
 
@@ -140,9 +144,9 @@ workflow 会通过 Wrangler 将这三项值同步为同名 Worker Secret。不�
 
 检查：
 
-- `ACCESS_TEAM_DOMAIN` 是否已经保存为 GitHub Actions Secret，并由最新一次 `Deploy` workflow 成功同步。
+- `ACCESS_TEAM_DOMAIN` 是否已经在 Worker 的 `Variables and Secrets` 页面保存为 Secret，并部署到当前版本。
 - Team Domain 是否为 `xxx.cloudflareaccess.com`，且没有 `https://`。
-- `ACCESS_AUD` 是否已保存为 GitHub Actions Secret，且值来自当前 Access 应用。
+- `ACCESS_AUD` 是否已在同一页面保存为 Secret，且值来自当前 Access 应用。
 
 ### 登录后提示“Access 登录已失效”
 
