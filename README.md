@@ -101,20 +101,30 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 
 - Node.js **22.12.0 或更高版本**，以及 npm。
 - 可使用 Workers、Durable Objects 与 D1 的 Cloudflare 账户。
-- Cloudflare Zero Trust Access 应用。自定义域名可选；默认可直接使用账户的 `workers.dev` 域名。
+- 已启用 Cloudflare Zero Trust 的账户。无需手动创建 Access 应用，自定义域名可选。
 - 一台你有权访问的公网 SSH 服务器。
 
-### 配置 Cloudflare Zero Trust Access
+### 一次运行，自动配置认证与部署
 
-EdgeSSH 没有独立的本地登录系统，正式入口必须先经过 Cloudflare Zero Trust Access。首次部署时请先完成：
+你只需准备三项：
 
-1. 在 **Zero Trust > 访问控制（Access controls）> 应用程序（Applications）** 创建 **自托管和私有应用（Self-hosted and private）**，并绑定 EdgeSSH 的实际访问域名。默认可填写 `<WORKER_NAME>.<你的 Workers 子域>.workers.dev`，同时将 `CUSTOM_DOMAIN` 留空；只有真正绑定自定义域名时才填写 `CUSTOM_DOMAIN`。
-2. 添加一条 **允许（Allow）** 策略，使用 **包括（Include）> 电子邮件（Emails）** 明确填写管理员邮箱；不要使用 **所有人（Everyone）** 或 **绕过（Bypass）**。
-3. 选择 **标识提供程序（Identity Provider）**。个人部署可使用 **一次性 PIN（One-time PIN）**；新建 Zero Trust 组织若没有该选项，需要先到 **集成（Integrations）> 标识提供程序（Identity providers）** 手动添加。
-4. 从 Access 应用中取得 **应用受众 (AUD) 标签（Application Audience (AUD) Tag）**，并从 Zero Trust **设置（Settings）** 取得 **团队域（Team Domain）**。
-5. 将它们分别写入 `ACCESS_AUD` 与 `ACCESS_TEAM_DOMAIN` Worker 机密（Secret）。
+1. **启用 Cloudflare Zero Trust**，完成团队域名和账户计划的初始化。
+2. 在 Fork 后仓库的 **Settings > Secrets and variables > Actions** 添加 Secret：`CLOUDFLARE_API_TOKEN`。权限清单见[部署指南](DEPLOYMENT.md#api-token-权限)。
+3. 打开 **Actions > Deploy > Run workflow**，填写管理员邮箱并运行。也可预先将邮箱保存为 `ADMIN_EMAIL` Variable。
 
-完整的控制台点击步骤、OTP 配置、参数获取和故障排查见 **[Cloudflare Zero Trust 配置指南](docs/ZERO_TRUST.md)**。
+```text
+Zero Trust 已启用 + Cloudflare API Token + 管理员邮箱
+    ↓ Run workflow
+发现账户与 workers.dev 子域 → 创建/复用 Access 应用、邮箱 Allow 策略与 OTP
+    → 获取 Team Domain 与 AUD → 创建/复用 D1 → 首次生成加密密钥
+    → 数据库迁移 → 写入 Worker Secrets → 部署 Worker
+    ↓
+在 Actions 运行摘要打开访问地址，用邮箱验证码登录
+```
+
+无需手填 Account ID、D1 ID、Team Domain、AUD 或随机密钥。Token 能访问多个账户时，才需要用 `CLOUDFLARE_ACCOUNT_ID` 选择目标账户。
+
+EdgeSSH 面向**单管理员**，不允许匿名访问。重复运行复用资源和加密密钥，不删除数据；已有 Access 应用的登录方式及人工策略不会被覆盖。以后可在 Access 添加 GitHub 等身份提供程序，无需修改 Worker 的 JWT 校验逻辑。
 
 ### 获取项目
 
@@ -124,54 +134,23 @@ cd EdgeSSH
 npm ci
 ```
 
-### 配置与部署
+### 可选配置
 
-> [!IMPORTANT]
-> 本项目面向**单管理员**使用。Access 策略应仅允许管理员的明确身份，不要配置**所有人（Everyone）**或**绕过（Bypass）**。缺少 Access 配置时，受保护 API 会拒绝访问，不会降级为匿名网关。
+以下通常都可以留空，保存为 Actions Variable：
 
-1. 确定实际访问域名。默认入口为 `https://edgessh.<你的 Workers 子域>.workers.dev`；若通过 `WORKER_NAME` 修改 Worker 名称，入口中的 `edgessh` 也随之改变。自定义域名不是必需项。
-2. 在 Zero Trust 控制台为该实际访问域名创建**自托管和私有应用（Self-hosted and private）**，只允许管理员的明确邮箱或身份，并记下**团队域（Team Domain）**与**应用受众 (AUD) 标签（Application Audience (AUD) Tag）**。
-3. 在 GitHub Actions 中配置部署变量与机密（Secret），首次运行 `Deploy` 工作流（workflow）。工作流会在目标账户中按名称复用或创建 D1、应用迁移、同步 Worker 机密，并创建或更新 Worker。
-4. 部署完成后打开实际 Access 入口验收。以后重复运行会复用同名 Worker 与 D1，不需要手工复制 `database_id` 或修改 `wrangler.toml`。
+| 名称 | 示例值 | 用途 |
+| --- | --- | --- |
+| `ADMIN_EMAIL` | `you@example.com` | 省去每次手动输入邮箱；修改后更新脚本创建的邮箱策略 |
+| `CLOUDFLARE_ACCOUNT_ID` | `0123456789abcdef0123456789abcdef` | 多账户 Token 的账户选择 |
+| `WORKER_NAME` | `my-edgessh` | 默认 `edgessh` |
+| `D1_DATABASE_NAME` | `my-edgessh-accounts` | 默认 `<Worker 名>-accounts` |
+| `D1_DATABASE_ID` | `00000000-0000-4000-8000-000000000001` | 复用明确指定的数据库 |
+| `CUSTOM_DOMAIN` | `ssh.example.com` | 真正的自定义域名；`*.workers.dev` 必须留空；兼容 Secret，Secret 优先 |
+| `ACCESS_IDP_IDS` | `一个或多个 IdP UUID，以逗号分隔` | 创建新应用时使用已有 GitHub/其他 IdP，而非自动配置 OTP |
 
-| 配置 | 类型与位置 | 示例值 | 用途 |
-| --- | --- | --- | --- |
-| `DB` | `wrangler.toml` 中的 D1 binding | `DB` | 保存加密主机资料 |
-| `SSH_SESSIONS` | `wrangler.toml` 中的 Durable Object binding | `SSH_SESSIONS` | 隔离 SSH 会话 |
-| `ASSETS` | `wrangler.toml` 中的静态资源 binding | `ASSETS` | 提供前端资源 |
-| `ACCESS_TEAM_DOMAIN` | GitHub Actions 机密（Secret） | `my-team.cloudflareaccess.com` | Access 团队域名，部署时同步为 Worker 机密 |
-| `ACCESS_AUD` | GitHub Actions 机密（Secret） | `012345…`（常见外观） | Access 应用的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值，部署时同步为 Worker 机密 |
-| `ENCRYPTION_KEY` | GitHub Actions 机密（Secret） | `AbCd…=`（44 字符 Base64） | 32 字节安全随机密钥的标准 Base64，部署时同步为 Worker 机密；不要使用示例文本 |
-| `CONNECT_TIMEOUT_MS` | 可选普通变量 | `10000` | TCP 建连超时；仓库已有默认值，通常无需填写 |
+`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`、`ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**，不需要用户复制回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
 
-生产运行时的 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 统一保存在 GitHub Actions 机密（Secret）中，由工作流通过标准输入同步为 Worker 机密，不写入仓库或普通变量。`DB`、`SSH_SESSIONS` 与 `ASSETS` 是部署时创建的绑定，不是环境变量；`CONNECT_TIMEOUT_MS` 已有默认配置，也无需重复添加。
-
-**首次部署才生成 `ENCRYPTION_KEY`，后续部署始终复用原值。** 丢失或直接替换密钥会导致已有资料无法解密。密钥只保存为 GitHub Actions 机密（Secret），不要写入源码、`wrangler.toml`、普通变量或提交记录。
-
-完整配置顺序、安全边界与验收清单见 [部署指南](DEPLOYMENT.md)。
-
-### GitHub Actions 自动部署
-
-仓库内置的 `Deploy` 工作流（workflow）会在推送到 `main` 后自动检查、迁移 D1 并部署，也可在 Actions 页面手动触发。首次使用前，在仓库的**设置（Settings）> 机密和变量（Secrets and variables）> Actions**中配置：
-
-| 名称 | GitHub 配置类型 | 示例值 | 用途 |
-| --- | --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | 变量（Variable） | `0123456789abcdef0123456789abcdef` | Cloudflare 账户 ID |
-| `CLOUDFLARE_API_TOKEN` | 机密（Secret） | `Cloudflare 生成的令牌` | 具备 Workers 部署和 D1 迁移权限的 API 令牌（API Token） |
-| `ACCESS_TEAM_DOMAIN` | 机密（Secret） | `my-team.cloudflareaccess.com` | Zero Trust 团队域（Team Domain） |
-| `ACCESS_AUD` | 机密（Secret） | `012345…`（常见外观） | 实际访问域名对应 Access 应用的 AUD，必须原样复制实际值 |
-| `ENCRYPTION_KEY` | 机密（Secret） | `AbCd…=`（44 字符 Base64） | 首次生成后长期复用的随机密钥；不要使用示例文本 |
-
-| 可选名称 | GitHub 配置类型 | 示例值 | 用途 |
-| --- | --- | --- | --- |
-| `WORKER_NAME` | 变量（Variable） | `my-edgessh` | 覆盖默认 Worker 名 `edgessh` |
-| `D1_DATABASE_NAME` | 变量（Variable） | `my-edgessh-accounts` | 指定 D1 名称 |
-| `D1_DATABASE_ID` | 变量（Variable） | `00000000-0000-4000-8000-000000000001` | 复用一个已知 D1 数据库 |
-| `CUSTOM_DOMAIN` | 变量（Variable）或机密（Secret） | `ssh.example.com` | 仅用于真正的自定义域名；使用 `*.workers.dev` 时必须留空 |
-
-全部可选值省略时，工作流使用 `edgessh`、自动创建或复用 `edgessh-accounts`，并发布到该账户的 `workers.dev` 域名。`CUSTOM_DOMAIN` 推荐使用 Variable，但兼容 Secret；两处同时设置时 Secret 优先。
-
-创建 API 令牌（API Token）时，可使用 Cloudflare 的**编辑 Cloudflare Workers（Edit Cloudflare Workers）**模板并补充 `D1: Edit`。只使用 `workers.dev` 时不需要目标区域（Zone）的自定义域名权限；设置 `CUSTOM_DOMAIN` 时，再将区域资源限制到实际使用的域名。API 令牌和运行时机密都必须保存为 GitHub 机密（Secret），不能保存为普通变量（Variable）。
+推送 `main` 或手动运行 `Deploy` 都会执行检查和部署。只在首次 Run workflow 输入邮箱也可以：后续未提供邮箱时保留已有认证配置。需要更换域名或重新自动配置 Access 时，请再次提供邮箱。完整权限、旧版迁移及 GitHub 登录扩展说明见[部署指南](DEPLOYMENT.md)；手工维护见 [Zero Trust 指南](docs/ZERO_TRUST.md)。
 
 ## 本地开发
 

@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 管理员邮箱（首次必填；也可预先保存为 ADMIN_EMAIL 变量）
+        required: false
+        type: string
 
 concurrency:
   group: production-deploy
@@ -21,6 +26,8 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ADMIN_EMAIL: ${{ inputs.admin_email || secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL }}
+      ACCESS_IDP_IDS: ${{ vars.ACCESS_IDP_IDS }}
       WORKER_NAME: ${{ vars.WORKER_NAME }}
       D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
       D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
@@ -39,20 +46,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 先校验配置，避免构建完成后才发现缺少 Secret，或创建不完整的远端资源。
+      # 本地格式先校验；账户发现与远端资源配置在检查通过后执行。
       - name: Validate deployment settings
         run: npm run deploy:validate
         env:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
-          ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
 
       - name: Check project
         run: npm run check
 
-      - name: Provision D1, migrate, sync secrets and deploy Worker
+      - name: Configure Access, provision D1, migrate and deploy Worker
         run: npm run deploy
         env:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
-          ACCESS_AUD: ${{ secrets.ACCESS_AUD }}

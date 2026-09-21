@@ -10,7 +10,9 @@ export interface DeploymentSettings {
   databaseName: string;
   databaseId?: string;
   customDomain?: string;
-  secrets: RuntimeSecrets;
+  adminEmail?: string;
+  identityProviderIds: string[];
+  secrets: Partial<RuntimeSecrets>;
 }
 
 export interface Database {
@@ -22,12 +24,12 @@ export function readDeploymentSettings(
   template: TomlTable,
   env: NodeJS.ProcessEnv,
 ): DeploymentSettings {
-  const required = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', ...runtimeSecretNames];
+  const required = ['CLOUDFLARE_API_TOKEN'];
   const missing = required.filter((name) => !env[name]?.trim());
   if (missing.length) throw new Error(`缺少部署配置：${missing.join(', ')}。请在 GitHub Actions 中配置。`);
 
-  const accountId = env.CLOUDFLARE_ACCOUNT_ID!.trim();
-  if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error('CLOUDFLARE_ACCOUNT_ID 必须是 32 位十六进制账户 ID。');
+  const accountId = env.CLOUDFLARE_ACCOUNT_ID?.trim() || '';
+  if (accountId && !/^[a-f0-9]{32}$/i.test(accountId)) throw new Error('CLOUDFLARE_ACCOUNT_ID 必须是 32 位十六进制账户 ID。');
   const workerName = env.WORKER_NAME?.trim() || String(template.name);
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(workerName)) throw new Error('WORKER_NAME 必须是 1–63 位小写字母、数字或连字符，且不能以连字符开头。');
 
@@ -50,23 +52,35 @@ export function readDeploymentSettings(
     throw new Error('CUSTOM_DOMAIN 不能填写 workers.dev 地址；使用 Worker 自带域名时请删除或留空该配置。');
   }
 
-  const secrets = Object.fromEntries(runtimeSecretNames.map((name) => [name, env[name]!.trim()])) as RuntimeSecrets;
-  const key = Buffer.from(secrets.ENCRYPTION_KEY, 'base64');
-  if (!/^[A-Za-z0-9+/]{43}=?$/.test(secrets.ENCRYPTION_KEY)
-    || key.length !== 32
-    || key.toString('base64').replace(/=+$/, '') !== secrets.ENCRYPTION_KEY.replace(/=+$/, '')) {
-    throw new Error('ENCRYPTION_KEY 必须是 Base64 编码的 32 字节密钥；已有数据时必须继续使用原密钥。');
+  const adminEmail = env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (adminEmail && !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(adminEmail)) {
+    throw new Error('ADMIN_EMAIL 必须是一个完整的管理员邮箱，不能填写多个邮箱或整个域名。');
   }
-  if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(secrets.ACCESS_TEAM_DOMAIN)) {
+  const identityProviderIds = [...new Set((env.ACCESS_IDP_IDS || '').split(',').map((id) => id.trim()).filter(Boolean))];
+  if (identityProviderIds.some((id) => !/^[a-f0-9-]{36}$/i.test(id))) {
+    throw new Error('ACCESS_IDP_IDS 必须是逗号分隔的 Cloudflare 身份提供程序 UUID。');
+  }
+  const secrets = Object.fromEntries(runtimeSecretNames
+    .filter((name) => env[name]?.trim())
+    .map((name) => [name, env[name]!.trim()])) as Partial<RuntimeSecrets>;
+  if (secrets.ENCRYPTION_KEY) {
+    const key = Buffer.from(secrets.ENCRYPTION_KEY, 'base64');
+    if (!/^[A-Za-z0-9+/]{43}=?$/.test(secrets.ENCRYPTION_KEY)
+      || key.length !== 32
+      || key.toString('base64').replace(/=+$/, '') !== secrets.ENCRYPTION_KEY.replace(/=+$/, '')) {
+      throw new Error('ENCRYPTION_KEY 必须是 Base64 编码的 32 字节密钥；已有数据时必须继续使用原密钥。');
+    }
+  }
+  if (secrets.ACCESS_TEAM_DOMAIN && !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(secrets.ACCESS_TEAM_DOMAIN)) {
     throw new Error('ACCESS_TEAM_DOMAIN 必须形如 team.cloudflareaccess.com，不包含 https://。');
   }
   if (runtimeSecretNames.some((name) => name in ((template.vars as TomlTable | undefined) ?? {}))) {
-    throw new Error('运行时 Secret 不得放在 wrangler.toml 的 vars 中，请改用 GitHub Actions Secrets。');
+    throw new Error('运行时 Secret 不得放在 wrangler.toml 的 vars 中，请使用 Worker Secrets。');
   }
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, secrets,
+    databaseName, databaseId, customDomain, adminEmail, identityProviderIds, secrets,
   };
 }
 
@@ -79,6 +93,9 @@ export function createDeploymentConfig(
     ...template,
     account_id: settings.accountId,
     name: settings.workerName,
+    // 自定义入口启用时关闭备用公网入口，避免绕过对应的 Access 登录页。
+    workers_dev: !settings.customDomain,
+    preview_urls: false,
     ...(settings.customDomain ? { routes: [{ pattern: settings.customDomain, custom_domain: true }] } : {}),
     d1_databases: (template.d1_databases as TomlTable[]).map((binding) => binding.binding === 'DB'
       ? { ...binding, database_name: database.name, database_id: database.uuid }

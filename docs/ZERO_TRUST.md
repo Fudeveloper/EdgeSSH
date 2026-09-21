@@ -1,5 +1,9 @@
 # Cloudflare Zero Trust Access 配置
 
+> **普通部署无需手工执行本页步骤。** 启用 Zero Trust 后，保存 Cloudflare API Token，在 **Actions > Deploy > Run workflow** 输入管理员邮箱，工作流会自动创建/复用 Access 应用、邮箱 Allow 策略、OTP，并获取团队域与 AUD、保存 Worker Secrets。详见[自动部署指南](../DEPLOYMENT.md)。
+>
+> 本页保留控制台操作，供排障、维护既有应用或扩展 GitHub 等登录方式使用。部署脚本不会覆盖已有应用的 IdP 配置。
+
 EdgeSSH **不提供本地用户名 / 密码登录**。为了避免任何人直接打开你的 WebSSH，生产环境必须把访问入口放在 Cloudflare Zero Trust Access 后面。
 
 EdgeSSH 会在 Worker 内再次校验 Cloudflare Access 注入的 `Cf-Access-Jwt-Assertion`，包括签名、Issuer、Audience、有效期、用户 `sub` 和邮箱。因此，仅仅给域名加一个普通登录页还不够：**Access 应用、身份策略、`ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 必须对应同一个应用。**
@@ -115,9 +119,9 @@ my-team.cloudflareaccess.com
 Cloudflare 官方获取 AUD 的说明：
 https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/
 
-## 在 GitHub Actions 保存 Worker 机密（Secret）
+## Worker 机密（Secret）的自动管理
 
-按 [部署指南](../DEPLOYMENT.md) 打开 GitHub 仓库的**设置（Settings）> 机密和变量（Secrets and variables）> Actions**，将以下值添加为仓库机密（Repository secrets）：
+自动部署会取得并保存以下值到 Cloudflare Worker Secrets，无需用户复制回 GitHub：
 
 | 名称 | 示例值 | 说明 |
 | --- | --- | --- |
@@ -125,7 +129,7 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 | `ACCESS_AUD` | `012345…`（常见外观） | 前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值 |
 | `ENCRYPTION_KEY` | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用；不要使用示例文本 |
 
-`Deploy` 工作流会先校验这三个值，再通过标准输入同步为 Cloudflare Worker 机密（Secret）。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。
+`Deploy` 通过标准输入写入新机密，后续保留 Worker 中的加密密钥。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。旧部署已有 Access 机密且未输入管理员邮箱时，也会保留原 Access 配置。
 
 `ENCRYPTION_KEY` 的生成要求和保管注意事项见[部署指南](../DEPLOYMENT.md#worker-runtime-secrets)。生产部署不需要在本地执行 Wrangler 机密（Secret）或 Worker 部署命令。
 
@@ -145,9 +149,9 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 
 检查：
 
-- GitHub Actions 中的 `ACCESS_TEAM_DOMAIN` 是否配置正确，以及最近一次 `Deploy` 工作流是否已成功将它同步到当前 Worker 版本。普通部署无需在 Worker 控制台手工重复保存。
+- Worker 中是否已有 `ACCESS_TEAM_DOMAIN` Secret，以及最近一次 `Deploy` 是否成功。首次部署请提供管理员邮箱，由工作流自动获取并保存。
 - 团队域（Team Domain）是否为 `xxx.cloudflareaccess.com`，且没有 `https://`。
-- GitHub Actions 中的 `ACCESS_AUD` 是否来自当前 Access 应用，以及最近一次 `Deploy` 工作流是否同步成功。
+- Worker 中是否已有 `ACCESS_AUD` Secret，并对应当前入口的 Access 应用。更换 hostname 后需要带管理员邮箱重新运行部署。
 
 ### 登录后提示“Access 登录已失效”
 

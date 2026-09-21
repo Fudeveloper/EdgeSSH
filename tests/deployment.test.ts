@@ -58,6 +58,8 @@ test('worker, database and custom domain can be configured for another account',
   const config = createDeploymentConfig(template, custom, { ...database, name: custom.databaseName });
   assert.equal(config.name, 'my-ssh');
   assert.equal(config.account_id, 'b'.repeat(32));
+  assert.equal(config.workers_dev, false);
+  assert.equal(config.preview_urls, false);
   assert.deepEqual(config.routes, [{ pattern: 'ssh.example.com', custom_domain: true }]);
 });
 
@@ -78,8 +80,11 @@ test('explicit database settings and manually configured template values are res
 });
 
 test('missing deployment settings fail before provisioning and do not reveal values', () => {
-  assert.throws(() => readDeploymentSettings(template, {}), /CLOUDFLARE_ACCOUNT_ID.*ENCRYPTION_KEY.*ACCESS_AUD/);
-  assert.throws(() => readDeploymentSettings(template, { ...env, ACCESS_AUD: ' ' }), /ACCESS_AUD/);
+  assert.throws(() => readDeploymentSettings(template, {}), /CLOUDFLARE_API_TOKEN/);
+  const automatic = readDeploymentSettings(template, { CLOUDFLARE_API_TOKEN: 'token', ADMIN_EMAIL: 'Admin@example.com' });
+  assert.equal(automatic.accountId, '');
+  assert.equal(automatic.adminEmail, 'admin@example.com');
+  assert.deepEqual(automatic.secrets, {});
 });
 
 test('invalid account, resource, domain and runtime configuration fail validation', () => {
@@ -91,6 +96,8 @@ test('invalid account, resource, domain and runtime configuration fail validatio
     CUSTOM_DOMAIN: 'https://ssh.example.com/path',
     ENCRYPTION_KEY: Buffer.alloc(16).toString('base64'),
     ACCESS_TEAM_DOMAIN: 'https://example.cloudflareaccess.com',
+    ADMIN_EMAIL: 'everyone',
+    ACCESS_IDP_IDS: 'github',
   })) {
     assert.throws(() => readDeploymentSettings(template, { ...env, [name]: value }), new RegExp(name));
   }
@@ -181,12 +188,15 @@ test('unsuccessful API envelope aborts resource preparation', async () => {
   await assert.rejects(ensureDatabase(settings, fetcher), /未成功/);
 });
 
-test('Actions supplies runtime secrets from Secrets and uses the shared deploy entry point', async () => {
+test('Actions asks for email, keeps Token private and uses the shared deploy entry point', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
   for (const name of ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD']) {
-    assert.ok(workflow.includes(`${name}: \${{ secrets.${name} }}`));
     assert.equal(workflow.includes(`vars.${name}`), false);
   }
+  assert.ok(workflow.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}'));
+  assert.ok(workflow.includes('inputs.admin_email || secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL'));
+  assert.equal(workflow.includes('secrets.ACCESS_AUD'), false);
+  assert.equal(workflow.includes('secrets.ACCESS_TEAM_DOMAIN'), false);
   assert.ok(workflow.includes('CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}'));
   assert.ok(workflow.includes('run: npm run deploy:validate'));
   assert.ok(workflow.includes('run: npm run deploy\n'));

@@ -9,7 +9,8 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["scripts/**/*.ts", "tests/deployment.test.ts"]
+  "include": ["scripts/**/*.ts", "tests/deployment*.test.ts"]
 }
