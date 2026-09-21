@@ -96,6 +96,10 @@ test('invalid account, resource, domain and runtime configuration fail validatio
   }
   assert.throws(() => readDeploymentSettings(template, { ...env, ENCRYPTION_KEY: `${env.ENCRYPTION_KEY}!` }), /ENCRYPTION_KEY/);
   assert.throws(() => readDeploymentSettings(template, { ...env, ENCRYPTION_KEY: `${env.ENCRYPTION_KEY}==` }), /ENCRYPTION_KEY/);
+  assert.throws(
+    () => readDeploymentSettings(template, { ...env, CUSTOM_DOMAIN: 'edgessh.example.workers.dev' }),
+    /CUSTOM_DOMAIN.*workers\.dev/,
+  );
   assert.throws(() => readDeploymentSettings({
     ...template, vars: { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
   }, env), /Secret/);
@@ -183,6 +187,7 @@ test('Actions supplies runtime secrets from Secrets and uses the shared deploy e
     assert.ok(workflow.includes(`${name}: \${{ secrets.${name} }}`));
     assert.equal(workflow.includes(`vars.${name}`), false);
   }
+  assert.ok(workflow.includes('CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}'));
   assert.ok(workflow.includes('run: npm run deploy:validate'));
   assert.ok(workflow.includes('run: npm run deploy\n'));
   assert.equal(workflow.includes('wrangler d1 migrations apply'), false);

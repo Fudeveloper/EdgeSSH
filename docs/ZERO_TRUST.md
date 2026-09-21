@@ -41,7 +41,7 @@ https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers
    edgessh.<你的 Workers 子域>.workers.dev
    ```
 
-   如果在 GitHub Actions 中设置了 `CUSTOM_DOMAIN`，也可以改填对应的自定义域名，例如 `ssh.example.com`。自定义域名不是部署必需项。
+   使用 Worker 自带域名时，GitHub Actions 中的 `CUSTOM_DOMAIN` 必须删除或留空，不要把 `*.workers.dev` 填进去。如果确实绑定了自定义域名，才填写例如 `ssh.example.com`。自定义域名不是部署必需项。
 
 7. `workers.dev` 与自定义域名都可以作为正式入口，但必须在这里保护实际使用的 hostname。不要把另一个无关域名或未受保护的地址当作入口。
 
@@ -119,9 +119,11 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 
 按 [部署指南](../DEPLOYMENT.md) 打开 GitHub 仓库的**设置（Settings）> 机密和变量（Secrets and variables）> Actions**，将以下值添加为仓库机密（Repository secrets）：
 
-1. `ACCESS_TEAM_DOMAIN`：前面取得的团队域（Team Domain）。
-2. `ACCESS_AUD`：前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag）。
-3. `ENCRYPTION_KEY`：32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用。
+| 名称 | 示例值 | 说明 |
+| --- | --- | --- |
+| `ACCESS_TEAM_DOMAIN` | `my-team.cloudflareaccess.com` | 前面取得的团队域（Team Domain），不带协议和路径 |
+| `ACCESS_AUD` | `012345…`（常见外观） | 前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值 |
+| `ENCRYPTION_KEY` | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用；不要使用示例文本 |
 
 `Deploy` 工作流会先校验这三个值，再通过标准输入同步为 Cloudflare Worker 机密（Secret）。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。
 
@@ -154,6 +156,13 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 - `ACCESS_AUD` 来自另一个 Access 应用。
 - `ACCESS_TEAM_DOMAIN` 属于另一个 Zero Trust 组织。
 - 你通过没有受对应 Access 应用保护的域名进入 Worker。
+
+### 邮箱登录完成，但 EdgeSSH 仍显示“未认证”
+
+1. 先确认浏览器地址栏与 Access 应用的公共主机名完全一致。`edgessh.<子域>.workers.dev` 和 `ssh.example.com` 是两个不同入口，登录 Cookie 不能跨 hostname 复用。
+2. 使用 `workers.dev` 时删除或留空 `CUSTOM_DOMAIN`，然后重新部署。该变量只接受真正的自定义域名；新版部署校验会直接拒绝误填的 `*.workers.dev`。
+3. 在同一个 hostname 直接打开 `/api/auth/me`。若仍返回 401，检查 `ACCESS_AUD` 是否来自保护该 hostname 的同一个 Access 应用，以及 `ACCESS_TEAM_DOMAIN` 是否属于同一个 Zero Trust 组织。
+4. 确认最近一次 `Deploy` 工作流成功。登录令牌优先从 `Cf-Access-Jwt-Assertion` 请求头读取，并兼容同源浏览器的 `CF_Authorization` Cookie；二者都没有时，说明当前入口没有正确经过 Access。
 
 ### 一次性 PIN（One-time PIN）收不到邮件
 

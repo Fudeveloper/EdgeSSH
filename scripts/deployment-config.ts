@@ -46,6 +46,9 @@ export function readDeploymentSettings(
   if (customDomain && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(customDomain)) {
     throw new Error('CUSTOM_DOMAIN 只能填写完整域名，不能包含协议、路径或通配符。');
   }
+  if (customDomain?.toLowerCase().endsWith('.workers.dev')) {
+    throw new Error('CUSTOM_DOMAIN 不能填写 workers.dev 地址；使用 Worker 自带域名时请删除或留空该配置。');
+  }
 
   const secrets = Object.fromEntries(runtimeSecretNames.map((name) => [name, env[name]!.trim()])) as RuntimeSecrets;
   const key = Buffer.from(secrets.ENCRYPTION_KEY, 'base64');

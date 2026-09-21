@@ -13,15 +13,15 @@
 
 ## 必需配置
 
-| 名称 | 配置位置 | 含义 |
-| --- | --- | --- |
-| `DB` | `wrangler.toml` 的 D1 binding | 主机资料数据库，优先复用已有资源 |
-| `SSH_SESSIONS` | `wrangler.toml` 的 Durable Object binding | SSH 会话隔离，保留现有类名及迁移历史 |
-| `ASSETS` | `wrangler.toml` 的静态资源 binding | 前端构建产物，不需要手动创建 |
-| `ACCESS_TEAM_DOMAIN` | GitHub Actions 机密（Secret） | 团队域名，例如 `my-team.cloudflareaccess.com`，部署时同步为 Worker 机密 |
-| `ACCESS_AUD` | GitHub Actions 机密（Secret） | 此 Access 应用的应用受众 (AUD) 标签（Application Audience (AUD) Tag），部署时同步为 Worker 机密 |
-| `ENCRYPTION_KEY` | GitHub Actions 机密（Secret） | 32 字节安全随机数的标准 Base64，部署时同步为 Worker 机密 |
-| `CONNECT_TIMEOUT_MS` | 可选普通变量 | 建连超时；仓库默认 `10000`，通常不要额外配置 |
+| 名称 | 配置位置 | 示例值 | 含义 |
+| --- | --- | --- | --- |
+| `DB` | `wrangler.toml` 的 D1 binding | `DB` | 主机资料数据库，优先复用已有资源 |
+| `SSH_SESSIONS` | `wrangler.toml` 的 Durable Object binding | `SSH_SESSIONS` | SSH 会话隔离，保留现有类名及迁移历史 |
+| `ASSETS` | `wrangler.toml` 的静态资源 binding | `ASSETS` | 前端构建产物，不需要手动创建 |
+| `ACCESS_TEAM_DOMAIN` | GitHub Actions 机密（Secret） | `my-team.cloudflareaccess.com` | 团队域名，部署时同步为 Worker 机密 |
+| `ACCESS_AUD` | GitHub Actions 机密（Secret） | `012345…`（常见外观） | 此 Access 应用的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值，部署时同步为 Worker 机密 |
+| `ENCRYPTION_KEY` | GitHub Actions 机密（Secret） | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，部署时同步为 Worker 机密；示例仅表示格式，必须随机生成 |
+| `CONNECT_TIMEOUT_MS` | 可选普通变量 | `10000` | 建连超时；仓库已有默认值，通常不要额外配置 |
 
 `DB`、`SSH_SESSIONS` 与 `ASSETS` 是绑定，不是环境变量。运行时 Secret 只有 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 与 `ENCRYPTION_KEY` 三项；部署流程还需要账户 ID 和 API Token。工作流不会把三个运行时 Secret 写入临时文件或命令行参数。
 
@@ -37,7 +37,7 @@
 ### 2. 配置 Zero Trust Access
 
 1. 进入 **Zero Trust > 访问控制（Access controls）> 应用程序（Applications）**，添加一个**自托管和私有应用（Self-hosted and private）**。
-2. 应用域名填写最终访问 EdgeSSH 的实际域名。默认可使用 `<WORKER_NAME>.<你的 Workers 子域>.workers.dev`；自定义域名可选，只有设置 Actions 变量 `CUSTOM_DOMAIN` 时才使用它。
+2. 应用域名填写最终访问 EdgeSSH 的实际域名。默认可使用 `<WORKER_NAME>.<你的 Workers 子域>.workers.dev`；此时 `CUSTOM_DOMAIN` 必须删除或留空。只有确实绑定 `ssh.example.com` 这类自定义域名时才设置 `CUSTOM_DOMAIN`。
 3. 添加**允许（Allow）**策略，只包含管理员的明确邮箱或身份。不要使用**所有人（Everyone）**、**绕过（Bypass）**或允许整个邮箱域的宽泛规则。
 4. 在 Zero Trust 的团队设置中找到**团队域（Team Domain）**，保存不带 `https://` 和路径的域名，例如 `my-team.cloudflareaccess.com`。
 5. 在 Access 应用详情中复制**应用受众 (AUD) 标签（Application Audience (AUD) Tag）**。不要把应用 ID、客户端 ID（Client ID）或策略 ID 当作 AUD。
@@ -56,15 +56,24 @@ Cloudflare 账户 ID 可在控制面板（Dashboard）的账户概览或 Worker 
 
 在 GitHub 仓库进入**设置（Settings）> 机密和变量（Secrets and variables）> Actions**：
 
-| 名称 | GitHub 类型 | 值 |
-| --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | 变量（Variable） | Cloudflare 账户 ID |
-| `CLOUDFLARE_API_TOKEN` | 机密（Secret） | 上一步创建的最小权限 API 令牌（API Token） |
-| `ACCESS_TEAM_DOMAIN` | 机密（Secret） | Zero Trust 团队域（Team Domain），不带协议和路径 |
-| `ACCESS_AUD` | 机密（Secret） | 实际访问域名对应 Access 应用的 AUD |
-| `ENCRYPTION_KEY` | 机密（Secret） | 32 字节安全随机数的标准 Base64，只在首次部署时生成 |
+| 名称 | GitHub 类型 | 示例值 | 值 |
+| --- | --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | 变量（Variable） | `0123456789abcdef0123456789abcdef` | Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | 机密（Secret） | `Cloudflare 生成的令牌` | 上一步创建的最小权限 API 令牌（API Token） |
+| `ACCESS_TEAM_DOMAIN` | 机密（Secret） | `my-team.cloudflareaccess.com` | Zero Trust 团队域（Team Domain），不带协议和路径 |
+| `ACCESS_AUD` | 机密（Secret） | `012345…`（常见外观） | 实际访问域名对应 Access 应用的 AUD，必须原样复制实际值 |
+| `ENCRYPTION_KEY` | 机密（Secret） | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，只在首次部署时生成；不要使用示例文本 |
 
-可选变量为 `WORKER_NAME`、`D1_DATABASE_NAME`、`D1_DATABASE_ID` 与 `CUSTOM_DOMAIN`。不填写 `CUSTOM_DOMAIN` 时，Worker 直接发布到该账户的 `workers.dev` 域名；这不会影响 D1、Durable Object 或 Access JWT 校验。
+可选部署值：
+
+| 名称 | GitHub 类型 | 示例值 | 何时填写 |
+| --- | --- | --- | --- |
+| `WORKER_NAME` | 变量（Variable） | `my-edgessh` | 需要覆盖默认 Worker 名 `edgessh` 时 |
+| `D1_DATABASE_NAME` | 变量（Variable） | `my-edgessh-accounts` | 需要指定 D1 名称时 |
+| `D1_DATABASE_ID` | 变量（Variable） | `00000000-0000-4000-8000-000000000001` | 需要复用一个已知 D1 ID 时 |
+| `CUSTOM_DOMAIN` | 变量（Variable）或机密（Secret） | `ssh.example.com` | 仅绑定自定义域名时；使用 `*.workers.dev` 时必须留空 |
+
+`CUSTOM_DOMAIN` 推荐保存为普通变量，因为域名不是敏感信息；工作流也兼容 Secret，并在两处同时存在时优先使用 Secret。不填写时，Worker 直接发布到该账户的 `workers.dev` 域名；这不会影响 D1、Durable Object 或 Access JWT 校验。
 
 进入 **Actions > Deploy > 运行工作流（Run workflow）** 完成首次部署。工作流（workflow）会校验配置、检查项目、创建或复用 D1、应用迁移、通过标准输入同步 Worker 机密，并创建或更新 Worker。
 
@@ -92,15 +101,15 @@ Cloudflare 账户 ID 可在控制面板（Dashboard）的账户概览或 Worker 
 
 仓库必须配置五个 Actions 值：
 
-| 名称 | 配置位置 | 要求 |
-| --- | --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | Actions 变量（Variable） | 目标 Cloudflare 账户 ID |
-| `CLOUDFLARE_API_TOKEN` | Actions 机密（Secret） | 限定到目标账户，并具备 Workers 部署与 D1 迁移权限 |
-| `ACCESS_TEAM_DOMAIN` | Actions 机密（Secret） | Zero Trust 团队域（Team Domain） |
-| `ACCESS_AUD` | Actions 机密（Secret） | 实际访问域名对应 Access 应用的 AUD |
-| `ENCRYPTION_KEY` | Actions 机密（Secret） | 首次生成后长期复用的加密密钥 |
+| 名称 | 配置位置 | 示例值 | 要求 |
+| --- | --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Actions 变量（Variable） | `0123456789abcdef0123456789abcdef` | 目标 Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | Actions 机密（Secret） | `Cloudflare 生成的令牌` | 限定到目标账户，并具备 Workers 部署与 D1 迁移权限 |
+| `ACCESS_TEAM_DOMAIN` | Actions 机密（Secret） | `my-team.cloudflareaccess.com` | Zero Trust 团队域（Team Domain） |
+| `ACCESS_AUD` | Actions 机密（Secret） | `012345…`（常见外观） | 实际访问域名对应 Access 应用的 AUD，必须原样复制实际值 |
+| `ENCRYPTION_KEY` | Actions 机密（Secret） | `AbCd…=`（44 字符 Base64） | 首次生成后长期复用的随机加密密钥；不要使用示例文本 |
 
-可选 Actions 变量包括 `WORKER_NAME`、`D1_DATABASE_NAME`、`D1_DATABASE_ID` 与 `CUSTOM_DOMAIN`。三个运行时机密由工作流通过标准输入同步到 Worker；不要把本地 `.dev.vars` 或 `wrangler secret put` 作为普通用户的生产配置流程。
+可选部署值及示例见上方配置表。`CUSTOM_DOMAIN` 可放 Variable 或 Secret；`WORKER_NAME`、`D1_DATABASE_NAME`、`D1_DATABASE_ID` 使用 Variable。三个运行时机密由工作流通过标准输入同步到 Worker；不要把本地 `.dev.vars` 或 `wrangler secret put` 作为普通用户的生产配置流程。
 
 ## 验收清单（5.6 SOL 执行）
 

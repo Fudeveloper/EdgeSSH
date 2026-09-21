@@ -24,7 +24,8 @@ jobs:
       WORKER_NAME: ${{ vars.WORKER_NAME }}
       D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
       D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
-      CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+      # 域名本身不是敏感信息，推荐使用 Variable；同时兼容已将它保存为 Secret 的仓库。
+      CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

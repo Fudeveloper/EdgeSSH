@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { Env } from '../types';
+import { accessToken } from './access-token';
 import { APIError } from './http';
 
 export interface Account { id: string; username: string }
@@ -9,7 +10,7 @@ export async function currentAccount(request: Request, env: Env): Promise<Accoun
   if (!env.ACCESS_AUD || !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN ?? '')) {
     throw new APIError('管理员尚未配置 Zero Trust Access。', 503);
   }
-  const token = request.headers.get('Cf-Access-Jwt-Assertion');
+  const token = accessToken(request);
   if (!token) throw new APIError('请通过 Cloudflare Access 登录后访问。', 401);
   const issuer = `https://${env.ACCESS_TEAM_DOMAIN}`;
   let keys = resolvers.get(issuer);
