@@ -1,6 +1,6 @@
 import type { Env } from './types';
 import { SSHSessionDO } from './backend/durable-object';
-import { corsPreflightResponse, corsResponse, httpsRedirect, isProductionHttp, jsonError, secureResponse } from './http-security';
+import { corsPreflightResponse, corsResponse, hasValidWebSocketOrigin, httpsRedirect, isProductionHttp, jsonError, secureResponse } from './http-security';
 import { currentAccount } from './accounts/auth';
 import { authRoute } from './accounts/auth-routes';
 import { authProvider } from './accounts/auth-provider';
@@ -13,11 +13,6 @@ export { SSHSessionDO };
 function clientAddress(request: Request): string {
   const value = request.headers.get('CF-Connecting-IP') ?? 'local';
   return /^[0-9A-Fa-f:.]{2,64}$/.test(value) ? value.toLowerCase() : 'unknown';
-}
-
-function hasValidWebSocketOrigin(request: Request): boolean {
-  const origin = request.headers.get('Origin');
-  return origin === null || origin === new URL(request.url).origin;
 }
 
 async function sessionTicket(request: Request, env: Env, accountId: string): Promise<Response> {

@@ -50,7 +50,6 @@ export interface Env {
   DB: D1Database;
   ENCRYPTION_KEY: string;
   AUTH_PROVIDER?: string;
-  ADMIN_ACCOUNT_ID?: string;
   APP_ORIGIN?: string;
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;

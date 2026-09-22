@@ -117,13 +117,14 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 | `ADMIN_EMAIL` | Variable | 管理员邮箱，也可在 Run workflow 输入 | 不填 |
 | `GITHUB_CLIENT_ID` | Variable | 不填 | OAuth App 的 Client ID |
 | `GITHUB_CLIENT_SECRET` | Secret | 不填 | OAuth App 的 Client Secret |
-| `GITHUB_ADMIN` | Variable | 不填 | 唯一允许登录的 GitHub 用户名 |
+| `GITHUB_ADMIN` | Variable | 不填 | 首次启用时解析数字 ID 的 GitHub 用户名 |
+| `GITHUB_ADMIN_ID` | Variable | 不填 | 通常留空；显式更换管理员时填写数字 ID |
 
 `CUSTOM_DOMAIN` 只填主机名，不带 `https://`、路径或通配符。域名需要由部署账户的 Cloudflare Zone 管理，Token 需要该 Zone 的 Workers Routes 编辑和 Zone 读取权限；Action 会自动绑定 Worker，Cloudflare 负责 DNS 与证书。确实使用 `workers.dev` 时才将它留空，且不要把 `*.workers.dev` 填进去。
 
-**Cloudflare 模式**：先在 Cloudflare 控制台启用 Zero Trust，然后运行 Action，自动配置 Access 应用、邮箱 Allow 策略和 OTP。
+**Cloudflare 模式**：先在 Cloudflare 控制台启用 Zero Trust，然后运行 Action，自动配置 Access 应用、邮箱 Allow 策略和 OTP。可在 Access 中明确允许多个邮箱或多个 IdP；它们只是同一管理员工作区的多个获准登录身份，不会产生独立资料库。
 
-**GitHub 模式**：先在 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）** 创建一个 OAuth App，回调地址填 `https://你的入口/auth/callback`。工作流会自动解析管理员数字 ID，跳过全部 Zero Trust 配置。入口尚不确定时，可先使用占位回调地址，部署后从 Action 摘要复制正式地址，再回 GitHub 更新。详情见[部署指南](DEPLOYMENT.md)。
+**GitHub 模式**：先在 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）** 创建一个 OAuth App，回调地址填 `https://你的入口/auth/callback`。首次工作流会解析管理员数字 ID 并固定到 D1，后续不再因用户名变化而更新，且跳过全部 Zero Trust API。入口尚不确定时，可先使用占位回调地址，部署后从 Action 摘要复制正式地址，再回 GitHub 更新。详情见[部署指南](DEPLOYMENT.md)。
 
 ```text
 确定自定义域名（或使用 workers.dev）+ 选择登录方式 + 填写对应变量/Secret
@@ -137,7 +138,7 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 
 无需手填 Account ID、D1 ID、Team Domain、AUD 或随机密钥。Token 能访问多个账户时，才需要用 `CLOUDFLARE_ACCOUNT_ID` 选择目标账户。
 
-EdgeSSH 面向**单管理员**，不允许匿名访问。两种认证不会同时生效；切换方式不改数据库、资料所有者或加密密钥。旧库只有一个所有者时自动沿用原 ID，新库使用固定管理员 ID。若原域名已有 Access 网关，改 GitHub 前需要解除该域名的旧 Access 保护；工作流不会擅自删除安全策略。
+EdgeSSH 面向**单管理员工作区**，不允许匿名访问。两种认证不会同时生效；切换方式不改数据库、资料所有者或加密密钥，并会让旧会话失效。旧库只有一个所有者时自动沿用原 ID 并永久记录，新库使用固定管理员 ID；发现多个所有者会停止而非静默合并。若原域名已有 Access 网关，改 GitHub 前需要解除该域名的旧 Access 保护；工作流不会擅自删除安全策略。
 
 ### 获取项目
 
@@ -159,6 +160,7 @@ npm ci
 | `D1_DATABASE_NAME` | `my-edgessh-accounts` | 默认 `<Worker 名>-accounts` |
 | `D1_DATABASE_ID` | `00000000-0000-4000-8000-000000000001` | 复用明确指定的数据库 |
 | `ACCESS_IDP_IDS` | `一个或多个 IdP UUID，以逗号分隔` | 创建新应用时使用已有 GitHub/其他 IdP，而非自动配置 OTP |
+| `GITHUB_ADMIN_ID` | `12345678` | 仅在明确更换 GitHub 管理员时填写 |
 
 `ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**；Cloudflare 模式另存 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`，GitHub 模式同步 `GITHUB_CLIENT_SECRET`。不需要用户复制自动生成的值回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
 
@@ -228,7 +230,7 @@ EdgeSSH/
 | 会话 | SSH 2.0、交互式 Shell、PTY、窗口尺寸同步、Keepalive |
 | 文件协议 | SFTP v3；单文件上传与下载上限 64 MiB；仅删除空目录 |
 | 私钥认证 | 未加密 OpenSSH Ed25519、RSA、ECDSA P-256/P-384/P-521 |
-| 主机管理 | 每个身份最多 200 台；不支持团队共享 |
+| 主机管理 | 单一管理员工作区最多 200 台；不提供多租户或独立用户资料 |
 | 终端编码 | UTF-8、GB18030、Big5，取决于浏览器解码支持 |
 
 暂不支持加密私钥、PEM/PKCS#8 私钥、SSH Agent、多因素键盘交互认证、SCP、端口转发、ProxyJump、SSH 压缩与会话内 rekey；不支持出站 TCP 25 端口。

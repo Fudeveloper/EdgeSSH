@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CloudflareApi, resolveAccountId } from '../scripts/cloudflare-api.ts';
 import { ensureAccess, resolveWorkerHostname } from '../scripts/cloudflare-access.ts';
-import { prepareEncryptionSecret, readWorkerSecretNames } from '../scripts/deployment-secrets.ts';
+import { prepareEncryptionSecret, readWorkerSecretNames, readWorkerVariable } from '../scripts/deployment-secrets.ts';
 import type { DeploymentSettings } from '../scripts/deployment-config.ts';
 
 const settings: DeploymentSettings = {
@@ -194,6 +194,19 @@ test('Worker list is unpaginated, including accounts with more than 100 Workers'
     return json([...Array.from({ length: 100 }, (_, index) => ({ id: `other-${index}` })), { id: settings.workerName }]);
   });
   assert.deepEqual(await readWorkerSecretNames(api, settings), new Set(['ENCRYPTION_KEY']));
+});
+
+test('existing plain-text administrator ID can seed the persistent deployment state', async () => {
+  const api = new CloudflareApi('token', async (url) => {
+    if (String(url).endsWith('/settings')) return json({ bindings: [
+      { name: 'AUTH_PROVIDER', type: 'plain_text', text: 'github' },
+      { name: 'GITHUB_ADMIN_ID', type: 'plain_text', text: '123456' },
+      { name: 'GITHUB_CLIENT_SECRET', type: 'secret_text' },
+    ] });
+    return json([{ id: settings.workerName }]);
+  });
+  assert.equal(await readWorkerVariable(api, settings, 'GITHUB_ADMIN_ID'), '123456');
+  assert.equal(await readWorkerVariable(api, settings, 'GITHUB_CLIENT_SECRET'), undefined);
 });
 
 test('existing encryption key is never overwritten, including stale Actions secrets', async () => {

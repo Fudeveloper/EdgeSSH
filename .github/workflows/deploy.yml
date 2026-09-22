@@ -40,6 +40,7 @@ jobs:
       GITHUB_CLIENT_ID: ${{ vars.GITHUB_CLIENT_ID }}
       GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
       GITHUB_ADMIN: ${{ vars.GITHUB_ADMIN }}
+      GITHUB_ADMIN_ID: ${{ vars.GITHUB_ADMIN_ID }}
       ADMIN_EMAIL: ${{ inputs.admin_email || secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL }}
       ACCESS_IDP_IDS: ${{ vars.ACCESS_IDP_IDS }}
       WORKER_NAME: ${{ vars.WORKER_NAME }}

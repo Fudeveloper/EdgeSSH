@@ -6,9 +6,9 @@ import { ensureDatabase } from './cloudflare-d1.ts';
 import { createDeploymentConfig, readDeploymentSettings } from './deployment-config.ts';
 import { CloudflareApi, resolveAccountId } from './cloudflare-api.ts';
 import { resolveWorkerHostname } from './cloudflare-access.ts';
-import { maskSecrets, prepareEncryptionSecret, readWorkerSecretNames } from './deployment-secrets.ts';
+import { maskSecrets, prepareEncryptionSecret, readWorkerSecretNames, readWorkerVariable } from './deployment-secrets.ts';
 import { prepareAuthentication, requiredAuthSecrets } from './deployment-auth.ts';
-import { administratorAccountId } from './administrator.ts';
+import { readWorkspaceState, updateWorkspaceState } from './workspace-state.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const generatedConfig = '.wrangler.generated.toml';
@@ -43,13 +43,22 @@ async function main(): Promise<void> {
   process.env.CLOUDFLARE_ACCOUNT_ID = settings.accountId;
   const existingSecrets = await readWorkerSecretNames(api, settings);
   const hostname = settings.customDomain || await resolveWorkerHostname(api, settings);
-  const authentication = await prepareAuthentication(api, settings, hostname, existingSecrets);
   const database = await ensureDatabase(settings);
-  const adminAccountId = await administratorAccountId(api, settings, database);
+  const workspace = await readWorkspaceState(api, settings, database);
+  const deployedGitHubId = workspace.githubAdminId
+    ?? (settings.authProvider === 'github' ? await readWorkerVariable(api, settings, 'GITHUB_ADMIN_ID') : undefined);
+  if (deployedGitHubId && !/^[1-9]\d*$/.test(deployedGitHubId)) {
+    throw new Error('已部署的 GitHub 管理员数字 ID 无效，停止自动覆盖。');
+  }
+  const authentication = await prepareAuthentication(api, settings, hostname, {
+    existingSecrets,
+    fixedGithubAdminId: deployedGitHubId,
+    previousProvider: workspace.authProvider,
+  });
   const secrets = { ...authentication.secrets, ...await prepareEncryptionSecret(api, settings, database, existingSecrets) };
   maskSecrets(secrets);
   const config = createDeploymentConfig(template, settings, database, {
-    hostname, adminAccountId, githubAdminId: authentication.githubAdminId,
+    hostname, githubAdminId: authentication.githubAdminId,
   });
   // 临时配置放在仓库根目录，保持 assets、main、migrations_dir 的相对路径语义。
   await writeFile(new URL(`../${generatedConfig}`, import.meta.url), stringify(config), 'utf8');
@@ -58,6 +67,8 @@ async function main(): Promise<void> {
   // Secret 只通过标准输入发送，不写临时文件或命令行参数；首次部署由 Wrangler 创建草稿 Worker。
   if (Object.keys(secrets).length) await runWrangler(['secret', 'bulk'], JSON.stringify(secrets));
   await runWrangler(['deploy']);
+  // Worker 成功发布后再切换状态；失败的发布不会让旧版本提前失去当前认证方式。
+  await updateWorkspaceState(api, settings, database, workspace, authentication.githubAdminId);
   // Wrangler 默认保留既有 Secret；部署后再次核对名称，避免把缺少认证的版本当作成功。
   const deployedSecrets = await readWorkerSecretNames(api, settings);
   for (const name of ['ENCRYPTION_KEY', ...requiredAuthSecrets(settings.authProvider)]) {

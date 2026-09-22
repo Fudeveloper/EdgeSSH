@@ -2,6 +2,7 @@ import { base64url, jwtVerify, SignJWT, type JWTPayload } from 'jose';
 import type { Env } from '../types.ts';
 import { APIError, apiFailure } from './http.ts';
 import { secureResponse } from '../http-security.ts';
+import { workspaceState } from './workspace.ts';
 
 const sessionCookie = '__Host-edgessh-session';
 const flowCookie = '__Host-edgessh-oauth';
@@ -111,7 +112,11 @@ export async function githubCallback(request: Request, env: Env, fetcher: typeof
     if (!Number.isSafeInteger(user.id) || String(user.id) !== settings.GITHUB_ADMIN_ID || typeof user.login !== 'string') {
       throw new APIError('此 GitHub 账号不是本实例的管理员。', 403);
     }
-    const session = await sign(settings, 'session', { sub: String(user.id), username: user.login }, sessionSeconds);
+    const workspace = await workspaceState(env);
+    if (workspace.authProvider !== 'github') throw new APIError('当前未启用 GitHub 登录。', 503);
+    const session = await sign(settings, 'session', {
+      sub: String(user.id), username: user.login, revision: workspace.authRevision,
+    }, sessionSeconds);
     // GitHub access_token 只在本次验证中使用，不写数据库、Cookie 或日志。
     response = redirect('/', [setCookie(sessionCookie, session, sessionSeconds)]);
   } catch (error) {
@@ -121,14 +126,15 @@ export async function githubCallback(request: Request, env: Env, fetcher: typeof
   return response;
 }
 
-export async function githubAccount(request: Request, env: Env): Promise<{ id: string; username: string }> {
+export async function githubAccount(request: Request, env: Env, authRevision: number): Promise<{ username: string }> {
   const settings = config(env);
   const token = cookie(request, sessionCookie);
   if (!token) throw new APIError('请先使用 GitHub 登录。', 401);
   try {
     const payload = await verify(settings, 'session', token);
-    if (payload.sub !== settings.GITHUB_ADMIN_ID || typeof payload.username !== 'string') throw new Error('Invalid identity');
-    return { id: `github:${payload.sub}`, username: payload.username };
+    if (payload.sub !== settings.GITHUB_ADMIN_ID || typeof payload.username !== 'string'
+      || payload.revision !== authRevision) throw new Error('Invalid identity');
+    return { username: payload.username };
   } catch {
     throw new APIError('登录已过期，请重新登录。', 401);
   }

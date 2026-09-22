@@ -14,7 +14,8 @@
 | `ADMIN_EMAIL` | Variable | 管理员邮箱 | 不需要 |
 | `GITHUB_CLIENT_ID` | Variable | 不需要 | OAuth App 的 Client ID |
 | `GITHUB_CLIENT_SECRET` | Secret | 不需要 | OAuth App 的 Client Secret |
-| `GITHUB_ADMIN` | Variable | 不需要 | 允许登录的唯一 GitHub 用户名，不是邮箱或组织名 |
+| `GITHUB_ADMIN` | Variable | 不需要 | 首次启用时用于解析数字 ID 的 GitHub 用户名 |
+| `GITHUB_ADMIN_ID` | Variable | 不需要 | 通常不填；显式更换管理员时填写新的数字用户 ID |
 
 `CUSTOM_DOMAIN` 只填完整主机名，不带 `https://`、路径或通配符。域名必须由部署账户的 Cloudflare Zone 管理；Action 会自动绑定 Worker，Cloudflare 负责 DNS 与证书。需要使用免费 `workers.dev` 地址时将它留空，不能填写 `*.workers.dev`。
 
@@ -28,17 +29,19 @@
 
 无需手动创建 Access 应用、OTP、D1，也无需抄录 Account ID、Team Domain 或 AUD。填写 `CUSTOM_DOMAIN` 时使用自定义域名；留空才使用 `https://edgessh.<账户子域>.workers.dev`。
 
+Access 应用的策略是唯一授权名单。可以在控制台添加多个明确邮箱，也可以启用多个 IdP；通过这些策略的身份都拥有同一管理员工作区的完整权限，共用一份主机资料。Worker 不再维护第二份邮箱白名单。
+
 ## GitHub 模式准备
 
 1. 打开 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）> 新建 OAuth 应用（New OAuth App）**。
 2. **应用名称（Application name）**自定；**主页 URL（Homepage URL）**填 EdgeSSH 地址，**授权回调 URL（Authorization callback URL）**填 `https://你的入口/auth/callback`。
 3. 保存 Client ID，生成一个 Client Secret，按上表分别保存到 Actions Variable 和 Secret。
-4. 设置 `AUTH_PROVIDER=github`、`CUSTOM_DOMAIN=你的主机名`、`GITHUB_ADMIN=你的GitHub用户名`，保存 Cloudflare API Token，然后运行 **Actions > Deploy**。使用 `workers.dev` 时才省略 `CUSTOM_DOMAIN`；邮箱输入框留空。
+4. 设置 `AUTH_PROVIDER=github`、`CUSTOM_DOMAIN=你的主机名`、首次使用的 `GITHUB_ADMIN=你的GitHub用户名`，保存 Cloudflare API Token，然后运行 **Actions > Deploy**。使用 `workers.dev` 时才省略 `CUSTOM_DOMAIN`；邮箱输入框留空。
 5. 若首次部署前不知道入口，可先为 OAuth App 使用占位 URL；部署后将 Action 摘要中的正式入口与回调地址复制回 OAuth App 设置，再登录。
 
 GitHub OAuth App 必须由用户在 GitHub 创建；普通 GitHub Token 没有官方“创建 OAuth App”的 REST 接口，工作流不会假装自动完成它。
 
-登录时仅读取 GitHub 公开身份，不申请仓库、组织或私人邮箱权限。Action 将用户名解析为数字用户 ID，Worker 只给这个 ID 签发会话。管理员更改 GitHub 用户名后，应同步更新 `GITHUB_ADMIN`。
+登录时仅读取 GitHub 公开身份，不申请仓库、组织或私人邮箱权限。首次部署将用户名解析为数字用户 ID 并固定在 D1；后续普通部署直接复用该 ID，不会因用户名改名或易主而改变管理员。仅在明确更换管理员时设置 `GITHUB_ADMIN_ID` 为新的数字 ID 并部署，部署会同时撤销旧会话；完成后可保留该值作为显式配置。
 
 ## API Token 权限
 
@@ -64,12 +67,12 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 1. 校验本地配置，运行类型检查、测试、前端构建和 Wrangler dry-run。
 2. 自动发现唯一账户（显式账户 ID 优先），读取现有 Worker Secret **名称**，不尝试读取密钥明文。
 3. 有 `CUSTOM_DOMAIN` 时使用该入口；否则读取账户 `workers.dev` 子域，未注册时自动注册确定性名称。已有子域不改名，避免影响其他 Worker。
-4. 根据 `AUTH_PROVIDER` 仅准备所选认证：Cloudflare 配置 Access/OTP/Allow，GitHub 验证指定管理员并准备 OAuth Secret。
+4. 根据 `AUTH_PROVIDER` 仅准备所选认证：Cloudflare 核对实际 Access 应用、策略、Team Domain 与 AUD，GitHub 首次解析并固定管理员数字 ID，后续直接复用。
 5. GitHub 模式不调用 Zero Trust API；Cloudflare 模式不需要 GitHub OAuth 参数。既有 Access 应用不重写人工 IdP 配置。
 6. 按 ID 或名称复用 D1，不存在才创建；指定 ID 不存在时直接失败，不用新空库替代。
 7. 已有 `ENCRYPTION_KEY` 则保留；没有密钥且 D1 没有主机资料时，用安全随机数生成 32 字节密钥。
-8. 执行远程 migration，仅应用增量 schema，不清空数据。
-9. 自动沿用旧库唯一资料所有者 ID，新库使用固定 `admin`。新增 Secret 通过标准输入交给 Wrangler；部署后核对当前模式必需的 Secret，并输出入口和 GitHub 回调地址。
+8. 执行远程 migration，仅应用增量 schema，不清空数据；单行 `workspace_state` 永久保存资料所有者、当前认证方式和会话代次。
+9. 自动沿用旧库唯一资料所有者 ID，新库使用固定 `admin`。即使主机表后来清空，工作区 ID 也不再重新推断。新增 Secret 通过标准输入交给 Wrangler；部署后核对当前模式必需的 Secret，并输出入口和 GitHub 回调地址。
 
 生产任务通过 concurrency 串行运行，失败可修正原因后重跑，已创建的资源会复用。请勿用多个仓库同时管理同一个 Worker。
 
@@ -97,6 +100,7 @@ EdgeSSH-Auto-Update: true
 | `D1_DATABASE_NAME` | Variable | `<Worker 名>-accounts` |
 | `D1_DATABASE_ID` | Variable | 指定已有 D1 UUID，不填则按名称查找 |
 | `ACCESS_IDP_IDS` | Variable | 新应用采用的 IdP UUID，多个用逗号分隔 |
+| `GITHUB_ADMIN_ID` | Variable | 仅显式更换 GitHub 管理员时填写数字用户 ID |
 | `ENCRYPTION_KEY` | Secret，仅恢复/迁移使用 | 仅 Worker 尚无密钥时使用；已有密钥不会覆盖 |
 
 `DB`、`SSH_SESSIONS`、`ASSETS` 是资源绑定，不是需要用户创建的变量。`CONNECT_TIMEOUT_MS` 已有默认值 `10000`。
@@ -109,19 +113,19 @@ EdgeSSH-Auto-Update: true
 - 新部署不需要 GitHub 写 Secrets 权限或额外 GitHub Token。生成的值不写入文件、命令行参数或 Actions artifact。
 - 重跑、推送新代码时保留原加密密钥。GitHub 中遗留的同名密钥不会替换 Worker 中的密钥。
 - **已有 D1 主机资料但缺少密钥时停止部署。** 必须恢复原密钥，不能生成新密钥假装修复。Cloudflare API 不提供 Secret 明文读回，自动生成的密钥也不会显示给用户；不要删除 Worker/Secret。需要独立灾备时，可在首次部署前自行生成并安全备份 32 字节 Base64 密钥，再保存为 `ENCRYPTION_KEY` GitHub Secret。
-- 旧部署已有三个 Worker Secrets 时，无需重新输入邮箱即可部署，也不要求复制 Secret 回 GitHub；脚本保留既有 Access 配置。这兼容人工管理的 Zone 级 Access 应用。
+- 旧部署无需重新输入邮箱，也不要求复制 Secret 回 GitHub；Cloudflare 模式每次从实际 Access 应用重新核对 Team Domain、AUD 与策略，不以 Secret 名称代替有效性检查，也不会改写人工维护的 IdP 或身份策略。
 - 若需要自动创建/管理 Access，或更换 hostname，请提供 `ADMIN_EMAIL`。自动管理使用账户级 Access API；原有 Zone 级应用请先核对，不要在同一 hostname 叠加应用。
 - 切换认证方式不改变 `ENCRYPTION_KEY`、D1 和管理员资料所有者。不要通过更换密钥来切换登录方式。
 
 ## 切换登录方式，保留同一管理员资料
 
 1. 修改 `AUTH_PROVIDER`，补齐目标方式的配置，然后运行 Deploy。
-2. 保持 Worker、D1 和加密密钥不变。部署只读检查旧库唯一所有者并沿用其 ID，不搬迁、不重加密资料。
+2. 保持 Worker、D1 和加密密钥不变。首次升级只读检查旧库唯一所有者并写入固定工作区状态，不搬迁、不重加密资料。
 3. 新库统一使用 `admin`。若旧库实际有多个资料所有者，脚本停止，不会猜测或合并原本隔离的数据。
 4. 从 Cloudflare 改 GitHub 时，**先解除入口域名原有的 Access 网关保护**，否则浏览器仍会先看到 Access。脚本发现这种情况会停止，不自动删除安全策略。仅解除登录网关，不要删除 Worker、D1 或 Secret。
-5. 反向切换时，Action 配置 Access，GitHub Cookie 不再被接受。旧 provider 的 Secret 即使暂时保留，也不是有效登录状态。
+5. 反向切换时，Action 会核对或准备有效 Access 应用；只有 Secret 名称但入口配置不完整会明确失败。切换会递增会话代次，旧 provider 的 Cookie 即使切回原方式也不会复活。
 
-GitHub 会话使用 Secure、HttpOnly、SameSite=Lax Cookie，有效期 8 小时；退出清除本浏览器 Cookie，不注销 GitHub 网站账号。会话签名通过 HKDF 从原加密密钥派生独立用途的密钥，无需用户再管理 SESSION_SECRET。无需新增用户表或账号绑定流程。
+GitHub 会话使用 Secure、HttpOnly、SameSite=Lax Cookie，有效期 8 小时；退出会先验证当前身份，再让该实例的全部管理员会话失效并清除本浏览器 Cookie，但不注销 GitHub 网站账号。Access 退出同样记录撤销时间并跳转到 Access 注销。会话签名通过 HKDF 从原加密密钥派生独立用途的密钥，无需用户再管理 SESSION_SECRET；撤销不会轮换 `ENCRYPTION_KEY`。无需新增用户表、设备后台或账号绑定流程。
 
 Cloudflare 模式仍可用 `ACCESS_IDP_IDS` 为新 Access 应用选择现成 IdP；这属于 Access 模式，不是原生 `AUTH_PROVIDER=github`。
 

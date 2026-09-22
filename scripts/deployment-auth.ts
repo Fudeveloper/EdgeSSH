@@ -2,6 +2,13 @@ import { ensureAccess } from './cloudflare-access.ts';
 import type { CloudflareApi } from './cloudflare-api.ts';
 import type { DeploymentSettings, RuntimeSecrets } from './deployment-config.ts';
 
+interface AuthenticationOptions {
+  existingSecrets?: Set<string>;
+  fixedGithubAdminId?: string;
+  previousProvider?: DeploymentSettings['authProvider'];
+  fetcher?: typeof fetch;
+}
+
 export function requiredAuthSecrets(provider: DeploymentSettings['authProvider']): string[] {
   return provider === 'github' ? ['GITHUB_CLIENT_SECRET'] : ['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
 }
@@ -10,26 +17,36 @@ export async function prepareAuthentication(
   api: CloudflareApi,
   settings: DeploymentSettings,
   hostname: string,
-  existing: Set<string>,
-  fetcher: typeof fetch = fetch,
+  options: AuthenticationOptions = {},
 ): Promise<{ secrets: Partial<RuntimeSecrets>; githubAdminId?: string }> {
+  const fetcher = options.fetcher ?? fetch;
   if (settings.authProvider === 'cloudflare') {
-    const preserve = !settings.adminEmail && requiredAuthSecrets('cloudflare').every((name) => existing.has(name));
-    if (preserve) {
-      console.log('保留已有 Cloudflare Access 认证配置。');
-      return { secrets: {} };
-    }
-    if (!settings.adminEmail) throw new Error('首次配置 Cloudflare 登录需要 ADMIN_EMAIL。');
+    // 每次从对应 Access 应用刷新 Team Domain/AUD；Secret 名称本身不能证明入口仍然有效。
     return { secrets: await ensureAccess(api, settings, hostname) };
   }
   // GitHub 新部署完全不调用 Zero Trust API。旧域名若仍在 Access 后面，明确停止，
   // 不擅自删除用户的安全配置，也不把“双重登录”误报为部署成功。
-  if (existing.has('ACCESS_AUD')) {
+  try {
     const response = await fetcher(`https://${hostname}/api/auth/me`, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
     const location = response.headers.get('Location');
-    if (location && new URL(location, `https://${hostname}`).hostname.endsWith('.cloudflareaccess.com')) {
+    const target = location ? new URL(location, `https://${hostname}`) : null;
+    if (target && (target.hostname.endsWith('.cloudflareaccess.com')
+      || target.pathname.startsWith('/cdn-cgi/access/'))) {
       throw new Error('当前域名仍由 Cloudflare Access 保护。请先在 Access 解除该域名的保护，再切换 GitHub；不会删除主机资料或加密密钥。');
     }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('仍由 Cloudflare Access 保护')) throw error;
+    if (options.previousProvider === 'cloudflare'
+      || [...(options.existingSecrets ?? [])].some((name) => name.startsWith('ACCESS_'))) {
+      throw new Error('无法确认入口是否已解除 Cloudflare Access 保护，请检查域名后重试；不会自动删除现有策略。');
+    }
+  }
+  const fixed = settings.githubAdminId ?? options.fixedGithubAdminId;
+  if (fixed) {
+    return { githubAdminId: fixed, secrets: { GITHUB_CLIENT_SECRET: settings.secrets.GITHUB_CLIENT_SECRET! } };
+  }
+  if (!settings.githubAdmin) {
+    throw new Error('首次配置 GitHub 登录需要 GITHUB_ADMIN 用户名，或显式设置 GITHUB_ADMIN_ID。');
   }
   const response = await fetcher(`https://api.github.com/users/${settings.githubAdmin}`, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'EdgeSSH' },

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { accessToken } from '../src/accounts/access-token.ts';
+import { hasValidWebSocketOrigin } from '../src/http-security.ts';
 
 test('Access JWT can fall back to the browser authorization cookie', async () => {
   const request = new Request('https://edgessh.example.workers.dev/api/auth/me', {
@@ -22,4 +23,11 @@ test('Access assertion header takes precedence over the browser cookie', async (
     },
   });
   assert.equal(accessToken(request), 'header-token');
+});
+
+test('WebSocket upgrades require an explicit same-origin browser header', () => {
+  const url = 'https://ssh.example.com/api/ssh';
+  assert.equal(hasValidWebSocketOrigin(new Request(url)), false);
+  assert.equal(hasValidWebSocketOrigin(new Request(url, { headers: { Origin: 'https://other.example.com' } })), false);
+  assert.equal(hasValidWebSocketOrigin(new Request(url, { headers: { Origin: 'https://ssh.example.com' } })), true);
 });

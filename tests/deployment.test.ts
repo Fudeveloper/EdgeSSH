@@ -195,6 +195,7 @@ test('Actions asks for email, keeps Token private and uses the shared deploy ent
   }
   assert.ok(workflow.includes('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}'));
   assert.ok(workflow.includes('inputs.admin_email || secrets.ADMIN_EMAIL || vars.ADMIN_EMAIL'));
+  assert.ok(workflow.includes('GITHUB_ADMIN_ID: ${{ vars.GITHUB_ADMIN_ID }}'));
   assert.equal(workflow.includes('secrets.ACCESS_AUD'), false);
   assert.equal(workflow.includes('secrets.ACCESS_TEAM_DOMAIN'), false);
   assert.ok(workflow.includes('CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}'));

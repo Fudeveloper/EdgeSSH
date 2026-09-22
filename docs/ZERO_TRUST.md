@@ -66,7 +66,7 @@ https://developers.cloudflare.com/workers/configuration/cloudflare-access/
 | 选择器（Selector） | `电子邮件（Emails）` |
 | 值（Value） | 你的完整邮箱，例如 `you@example.com` |
 
-如果需要多个管理员，请逐个添加明确邮箱。
+如果需要使用多个邮箱登录，请逐个添加明确邮箱。它们都是同一管理员工作区的获准身份，共用完整权限与同一份主机资料，不是独立用户。
 
 > [!WARNING]
 > 不要使用**包括（Include）> 所有人（Everyone）**。如果使用一次性 PIN（One-time PIN），也不要只写**包括（Include）> 登录方式（Login Methods）> 一次性 PIN（One-time PIN）**，否则任何能接收邮件验证码的人都可能符合策略。
@@ -131,7 +131,7 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 | `ACCESS_AUD` | `012345…`（常见外观） | 前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值 |
 | `ENCRYPTION_KEY` | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用；不要使用示例文本 |
 
-`Deploy` 通过标准输入写入新机密，后续保留 Worker 中的加密密钥。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。旧部署已有 Access 机密且未输入管理员邮箱时，也会保留原 Access 配置。
+`Deploy` 通过标准输入写入机密，后续保留 Worker 中的加密密钥。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。普通重部署会从实际 Access 应用重新取得 Team Domain 与 AUD，并核对现有策略；不会仅凭旧 Secret 名称假定入口有效，也不会覆盖人工维护的 IdP 或明确身份策略。
 
 `ENCRYPTION_KEY` 的生成要求和保管注意事项见[部署指南](../DEPLOYMENT.md#worker-runtime-secrets)。生产部署不需要在本地执行 Wrangler 机密（Secret）或 Worker 部署命令。
 

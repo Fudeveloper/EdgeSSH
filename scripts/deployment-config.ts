@@ -13,6 +13,7 @@ export interface DeploymentSettings {
   authProvider: 'cloudflare' | 'github';
   githubClientId?: string;
   githubAdmin?: string;
+  githubAdminId?: string;
   adminEmail?: string;
   identityProviderIds: string[];
   secrets: Partial<RuntimeSecrets>;
@@ -29,7 +30,7 @@ export function readDeploymentSettings(
 ): DeploymentSettings {
   const authProvider = env.AUTH_PROVIDER?.trim() || 'cloudflare';
   if (authProvider !== 'cloudflare' && authProvider !== 'github') throw new Error('AUTH_PROVIDER 只能是 cloudflare 或 github。');
-  const required = ['CLOUDFLARE_API_TOKEN', ...(authProvider === 'github' ? ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_ADMIN'] : [])];
+  const required = ['CLOUDFLARE_API_TOKEN', ...(authProvider === 'github' ? ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'] : [])];
   const missing = required.filter((name) => !env[name]?.trim());
   if (missing.length) throw new Error(`缺少部署配置：${missing.join(', ')}。请在 GitHub Actions 中配置。`);
 
@@ -67,9 +68,13 @@ export function readDeploymentSettings(
     throw new Error('ACCESS_IDP_IDS 必须是逗号分隔的 Cloudflare 身份提供程序 UUID。');
   }
   const githubClientId = authProvider === 'github' ? env.GITHUB_CLIENT_ID!.trim() : undefined;
-  const githubAdmin = authProvider === 'github' ? env.GITHUB_ADMIN!.trim().toLowerCase() : undefined;
+  const githubAdmin = authProvider === 'github' ? env.GITHUB_ADMIN?.trim().toLowerCase() || undefined : undefined;
   if (githubAdmin && !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(githubAdmin)) {
     throw new Error('GITHUB_ADMIN 必须是一个 GitHub 用户名。');
+  }
+  const githubAdminId = authProvider === 'github' ? env.GITHUB_ADMIN_ID?.trim() || undefined : undefined;
+  if (githubAdminId && !/^[1-9]\d*$/.test(githubAdminId)) {
+    throw new Error('GITHUB_ADMIN_ID 必须是 GitHub 个人账号的数字用户 ID。');
   }
   const selectedSecrets = authProvider === 'github'
     ? ['ENCRYPTION_KEY', 'GITHUB_CLIENT_SECRET'] : ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
@@ -93,7 +98,8 @@ export function readDeploymentSettings(
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, authProvider, githubClientId, githubAdmin, adminEmail, identityProviderIds, secrets,
+    databaseName, databaseId, customDomain, authProvider, githubClientId, githubAdmin, githubAdminId,
+    adminEmail, identityProviderIds, secrets,
   };
 }
 
@@ -101,7 +107,7 @@ export function createDeploymentConfig(
   template: TomlTable,
   settings: DeploymentSettings,
   database: Database,
-  runtime?: { hostname: string; adminAccountId: string; githubAdminId?: string },
+  runtime?: { hostname: string; githubAdminId?: string },
 ): TomlTable {
   return {
     ...template,
@@ -113,7 +119,7 @@ export function createDeploymentConfig(
     vars: {
       ...template.vars as TomlTable,
       AUTH_PROVIDER: settings.authProvider,
-      ...(runtime ? { APP_ORIGIN: `https://${runtime.hostname}`, ADMIN_ACCOUNT_ID: runtime.adminAccountId } : {}),
+      ...(runtime ? { APP_ORIGIN: `https://${runtime.hostname}` } : {}),
       ...(settings.authProvider === 'github' ? {
         GITHUB_CLIENT_ID: settings.githubClientId!,
         ...(runtime?.githubAdminId ? { GITHUB_ADMIN_ID: runtime.githubAdminId } : {}),

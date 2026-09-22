@@ -11,6 +11,21 @@ export async function readWorkerSecretNames(api: CloudflareApi, settings: Deploy
   return new Set(secrets.map((secret) => secret.name));
 }
 
+export async function readWorkerVariable(
+  api: CloudflareApi,
+  settings: DeploymentSettings,
+  name: string,
+): Promise<string | undefined> {
+  const base = `/accounts/${settings.accountId}/workers/scripts`;
+  const workers = await api.request<{ id: string }[]>(base);
+  if (!workers.some((worker) => worker.id === settings.workerName)) return undefined;
+  const configuration = await api.request<{ bindings: { name: string; type: string; text?: string }[] }>(
+    `${base}/${settings.workerName}/settings`,
+  );
+  const binding = configuration.bindings.find((entry) => entry.name === name && entry.type === 'plain_text');
+  return binding?.text;
+}
+
 export async function prepareEncryptionSecret(
   api: CloudflareApi,
   settings: DeploymentSettings,
