@@ -4,6 +4,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { historyKey, historyLabel } from './history';
 import { listHosts, hostCredentials, saveHost, removeHost, updateHostSystem, type CloudHost, type Credentials, type HostSystemInfo } from './cloud-api';
 import { Dashboard } from './dashboard';
+import { FilePage } from './file-page';
 import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
@@ -370,6 +371,7 @@ function applyLanguage(language: Language, persist = false): void {
 
 let profiles: SavedProfile[] = [];
 let dashboard: Dashboard | undefined;
+let filePage: FilePage | undefined;
 let hostKeys: Record<string, string> = {};
 let socket: WebSocket | null = null;
 let connectionState: ConnectionState = 'idle';
@@ -1065,6 +1067,7 @@ function showFormError(message: string, alternate?: string): void {
   currentFormError = messageTranslation(message, alternate);
   ui.formError.textContent = localize(currentFormError);
   ui.formError.hidden = false;
+  if (document.body.dataset.view === 'files') filePage?.setMessage(localize(currentFormError), true);
 }
 
 function toast(message: string, kind: 'info' | 'error' = 'info'): void {
@@ -1079,6 +1082,7 @@ function updateConnectionStatus(message: LocalizedMessage): void {
   currentSessionSubtitle = message;
   const text = localize(message);
   ui.sessionSubtitle.textContent = text;
+  filePage?.setMessage(text);
   if (connectionState === 'connecting') {
     const btnSpan = ui.connect.querySelector<HTMLElement>('span:last-child');
     if (btnSpan) btnSpan.textContent = text;
@@ -1087,6 +1091,7 @@ function updateConnectionStatus(message: LocalizedMessage): void {
 
 function setState(state: ConnectionState, label?: string): void {
   connectionState = state;
+  filePage?.setConnection(state, profiles.find((profile) => passwordContext(profile) === currentTargetKey)?.id, currentTargetLabel);
   const stateLabel = label ?? ({
     idle: bilingual('离线', 'Offline'),
     connecting: bilingual('连接中', 'Connecting'),
@@ -1213,6 +1218,7 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
   });
   startTimers();
   updateConnectionStatus(messageTranslation(message));
+  filePage?.setMessage('');
   event(message, 'ready');
   if (currentInitialCommand && !initialCommandSent) {
     initialCommandSent = true;
@@ -1224,7 +1230,7 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
       sendTerminalData(`${command}\r`);
     }, 120);
   }
-  terminal.focus();
+  if (document.body.dataset.view === 'workspace') terminal.focus();
 }
 
 function sendHostKeyDecision(accept: boolean): void {
@@ -1611,7 +1617,7 @@ async function connect(): Promise<void> {
     showFormError(validationError);
     return;
   }
-  dashboard?.openWorkspace();
+  if (document.body.dataset.view !== 'files') dashboard?.openWorkspace();
   if (location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     showFormError(bilingual('发送 SSH 凭据前必须使用 HTTPS。', 'HTTPS is required before SSH credentials can be sent.'));
     return;
@@ -1622,7 +1628,6 @@ async function connect(): Promise<void> {
   const generation = ++connectGeneration;
   const abortController = new AbortController();
   authorizationAbort = abortController;
-  setState('connecting');
   ui.terminalEmpty.hidden = true;
   resetTerminalForConnection(terminal);
   fitTerminal(false);
@@ -1632,11 +1637,13 @@ async function connect(): Promise<void> {
   const username = ui.username.value.trim();
   currentTargetKey = targetKey(host, port, username);
   currentTargetLabel = targetLabel(host, port, username);
+  setState('connecting');
   const pinnedKey = ui.fingerprint.value.trim() || hostKeys[currentTargetKey] || '';
   currentExpectedFingerprint = pinnedKey;
   currentRememberedFingerprint = '';
   if (pinnedKey) ui.fingerprint.value = pinnedKey;
-  currentInitialCommand = ui.initialCommand.value;
+  // 文件管理不应在隐藏终端里执行用户的初始命令；保存的主机配置仍保持原样。
+  currentInitialCommand = document.body.dataset.view === 'files' ? '' : ui.initialCommand.value;
   initialCommandSent = false;
   pendingHostKey = null;
   awaitingHostKeyDecision = false;
@@ -2217,7 +2224,24 @@ async function initialize(): Promise<void> {
   initializeCompatibilityAPI();
   initMobileToolbar();
   applyURLParameters();
+  // 两个视图共用指纹确认与通知，不能随隐藏的终端容器一起消失。
+  document.body.append(ui.hostKeyDialog, ui.toastRegion);
+  filePage = new FilePage(ui.fileManagerPanel, {
+    connect: async (host) => {
+      const loading = applyProfile(host);
+      const selectionGeneration = historyPasswordLoadGeneration;
+      await loading;
+      // 返回总览会作废凭据读取；即使用户立刻回到文件页，也不能启动已经取消的连接。
+      if (selectionGeneration === historyPasswordLoadGeneration && document.body.dataset.view === 'files') await connect();
+    },
+    disconnect: () => disconnect(),
+    openTerminal: () => {
+      dashboard?.openWorkspace();
+      if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
+    },
+  });
   dashboard = new Dashboard({
+    files: filePage,
     refresh: async () => {
       profiles = await loadProfiles();
       renderProfiles();

@@ -1180,7 +1180,8 @@ export class FileManager {
     this.elements.path.disabled = !this.ready;
     this.elements.back.disabled = !this.ready || this.historyIndex <= 0;
     this.elements.up.disabled = !this.ready || this.cwd === '/';
-    this.elements.home.disabled = !this.ready || this.cwd === this.homePath;
+    // 列目录失败时 cwd 仍是上次成功路径，允许用主目录按钮恢复，而不把错误页锁在原处。
+    this.elements.home.disabled = !this.ready || (this.cwd === this.homePath && this.elements.error.hidden);
     this.elements.refresh.disabled = !this.ready;
     this.elements.upload.disabled = !idle;
     this.elements.mkdir.disabled = !idle;

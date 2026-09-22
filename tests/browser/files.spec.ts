@@ -1,0 +1,200 @@
+import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { connectFiles, fileFixture } from './file-fixture';
+
+test('独立入口、空状态与移动端布局', async ({ page }, testInfo) => {
+  await fileFixture(page, { noHosts: true });
+  await expect(page.locator('#files-heading')).toBeVisible();
+  await expect(page.locator('#rail-files')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('#files-connect')).toBeDisabled();
+  await expect(page.locator('#file-upload')).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('files-empty.png'), fullPage: true });
+  await page.locator('#rail-overview').click();
+  await expect(page.locator('#hosts-heading')).toBeVisible();
+});
+
+test('连接、目录导航与共享终端会话不重复附着', async ({ page }, testInfo) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root');
+  await expect(page.locator('#file-table-body')).toContainText('README.md');
+  await expect(page.locator('#files-host')).toBeDisabled();
+  await expect(page.locator('#files-connection-state')).toHaveText('SSH 已连接');
+  await expect(page.locator('.header-add')).toBeHidden();
+  await page.locator('.files-footer').scrollIntoViewIfNeeded();
+  await expect(page.locator('.files-footer')).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('#toast-region .toast')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('files-connected.png'), fullPage: true });
+  await page.locator('#file-table-body tr').filter({ hasText: 'backups' }).dblclick();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root/backups');
+  await page.locator('#file-up').click();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root');
+  await page.locator('#files-terminal').click();
+  await expect(page.locator('#terminal-card')).toBeVisible();
+  await page.locator('#file-manager-tab').click();
+  await expect(page.locator('#app #file-manager-panel')).toBeVisible();
+  await page.getByRole('button', { name: '文件管理', exact: true }).click();
+  await expect(page.locator('.files-page #file-manager-panel')).toBeVisible();
+  await expect(page.locator('#file-manager-path')).toHaveValue('/root');
+  expect(fixture.sshSockets).toHaveLength(1);
+  expect(fixture.sftpSockets).toHaveLength(1);
+  expect(fixture.calls.filter((call) => call.type === 'terminal-input')).toHaveLength(0);
+  await page.locator('#files-terminal').click();
+  await expect(page.locator('#app #file-manager-panel')).toBeVisible();
+  await expect(page.locator('#file-manager-tab')).toHaveAttribute('aria-selected', 'true');
+});
+
+test('复用新建文件夹、重命名和删除协议', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  await expect(page.locator('#file-mkdir')).toBeEnabled();
+  page.once('dialog', (dialog) => dialog.accept('test-folder'));
+  await page.locator('#file-mkdir').click();
+  const folder = page.locator('#file-table-body tr').filter({ hasText: 'test-folder' });
+  await expect(folder).toBeVisible();
+  await folder.click();
+  page.once('dialog', (dialog) => dialog.accept('renamed-folder'));
+  await page.locator('#file-rename').click();
+  const renamed = page.locator('#file-table-body tr').filter({ hasText: 'renamed-folder' });
+  await expect(renamed).toBeVisible();
+  await renamed.click();
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.locator('#file-delete').click();
+  await expect(renamed).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('#file-delete').click();
+  await expect(renamed).toHaveCount(0);
+  await page.locator('#file-table-body tr').filter({ hasText: 'README.md' }).click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('#file-delete').click();
+  await expect(page.locator('#file-table-body')).not.toContainText('README.md');
+  expect(fixture.calls).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'sftp_mkdir', path: '/root/test-folder' }),
+    expect.objectContaining({ type: 'sftp_rename', oldPath: '/root/test-folder', newPath: '/root/renamed-folder' }),
+    expect.objectContaining({ type: 'sftp_rmdir', path: '/root/renamed-folder' }),
+    expect.objectContaining({ type: 'sftp_delete', path: '/root/README.md' }),
+  ]));
+});
+
+test('上传与下载校验实际字节', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  const payload = Buffer.from('file manager upload regression\n');
+  await page.locator('#file-upload-input').setInputFiles({ name: 'upload.txt', mimeType: 'text/plain', buffer: payload });
+  await expect(page.locator('#file-table-body')).toContainText('upload.txt');
+  expect(Buffer.concat(fixture.uploaded)).toEqual(payload);
+  await page.locator('#file-table-body tr').filter({ hasText: 'README.md' }).click();
+  const downloading = page.waitForEvent('download');
+  await page.locator('#file-download').click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe('README.md');
+  expect(await readFile((await download.path())!, 'utf8')).toBe('hello files\n');
+});
+
+test('更换主机清理旧会话，文件页继续可操作', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  await page.locator('#files-connect').click();
+  await expect(page.locator('#file-upload')).toBeDisabled();
+  await expect(page.locator('#files-host')).toBeEnabled();
+  await connectFiles(page, 'beta');
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  expect(fixture.calls.filter((call) => call.type === 'connect').map((call) => call.host)).toEqual(['192.0.2.10', '192.0.2.20']);
+  expect(fixture.calls.filter((call) => call.type === 'sftp_close')).toHaveLength(1);
+});
+
+test('文件页仍需指纹确认', async ({ page }) => {
+  const fixture = await fileFixture(page, { firstSeen: true });
+  await connectFiles(page);
+  await expect(page.locator('#host-key-dialog')).toBeVisible();
+  await expect(page.locator('#file-upload')).toBeDisabled();
+  expect(fixture.sftpSockets).toHaveLength(0);
+  await page.locator('#accept-host-key').click();
+  await expect(page.locator('#file-upload')).toBeEnabled();
+});
+
+test('凭据和目录错误显示在文件页', async ({ page }) => {
+  await fileFixture(page, { credentialError: true });
+  await connectFiles(page);
+  await expect(page.locator('#files-notice')).toContainText('读取凭据失败');
+  await expect(page.locator('#files-connect')).toBeEnabled();
+});
+
+test('目录权限错误可恢复', async ({ page }) => {
+  await fileFixture(page);
+  await connectFiles(page);
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  await page.locator('#file-manager-path').fill('/forbidden');
+  await page.locator('#file-manager-path').press('Enter');
+  await expect(page.locator('#file-manager-error')).toBeVisible();
+  await page.locator('#file-home').click();
+  await expect(page.locator('#file-table-body')).toContainText('README.md');
+  await expect(page.locator('#file-manager-error')).toBeHidden();
+});
+
+test('传输时离开需确认，切换终端不打断传输', async ({ page }) => {
+  const fixture = await fileFixture(page, { holdUpload: true });
+  await connectFiles(page);
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  await page.locator('#file-upload-input').setInputFiles({ name: 'pending.txt', mimeType: 'text/plain', buffer: Buffer.from('pending') });
+  await expect(page.locator('#file-manager-progress')).toBeVisible();
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.locator('#rail-overview').click();
+  await expect(page.locator('#files-heading')).toBeVisible();
+  await page.locator('#files-terminal').click();
+  await page.getByRole('button', { name: '文件管理', exact: true }).click();
+  await expect(page.locator('#file-manager-progress')).toBeVisible();
+  expect(fixture.sftpSockets).toHaveLength(1);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('#files-connect').click();
+  await expect(page.locator('#file-manager-progress')).toBeHidden();
+});
+
+test('读取凭据期间禁止切换终端，避免无反馈取消连接', async ({ page }) => {
+  await fileFixture(page);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  await page.route('**/api/hosts/alpha/credentials', async (route) => {
+    await pending;
+    await route.fulfill({ json: { password: 'test-only' } });
+  });
+  await connectFiles(page);
+  await expect(page.locator('#files-connect')).toHaveText('读取凭据中…');
+  await expect(page.locator('#files-terminal')).toBeDisabled();
+  finish();
+  await expect(page.locator('#file-upload')).toBeEnabled();
+  await expect(page.locator('#files-terminal')).toBeEnabled();
+});
+
+test('离开再返回文件页，迟到的凭据不会启动已取消会话', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  await page.route('**/api/hosts/alpha/credentials', async (route) => {
+    await pending;
+    await route.fulfill({ json: { password: 'test-only' } });
+  });
+  await connectFiles(page);
+  await expect(page.locator('#files-connect')).toHaveText('读取凭据中…');
+  await page.locator('#rail-overview').click();
+  await expect(page.locator('#hosts-heading')).toBeVisible();
+  await page.locator('#rail-files').click();
+  finish();
+  await expect(page.locator('#files-connect')).toHaveText('连接主机');
+  expect(fixture.sshSockets).toHaveLength(0);
+});
+
+test('会话授权失败后可重试，文件操作保持禁用', async ({ page }) => {
+  await fileFixture(page);
+  await page.route('**/api/session', (route) => route.fulfill({ status: 403, json: { error: '会话授权失败，请重新登录。' } }));
+  await connectFiles(page);
+  await expect(page.locator('#files-notice')).toContainText('会话授权失败');
+  await expect(page.locator('#files-connection-state')).toHaveText('连接失败');
+  await expect(page.locator('#files-connect')).toBeEnabled();
+  await expect(page.locator('#file-upload')).toBeDisabled();
+  await expect(page.locator('#files-host')).toBeEnabled();
+});

@@ -1,10 +1,12 @@
 import { api, saveHost, removeHost, refreshHostLocation, type CloudHost, type HostInput } from './cloud-api';
 import type { HostGlobe } from './globe';
+import type { FilePage } from './file-page';
 import { countryFlag } from './flags';
 import { systemIcon } from './os-icons';
 import './dashboard.css';
 
 interface DashboardActions {
+  files: FilePage;
   refresh(): Promise<CloudHost[]>;
   connect(host: CloudHost): Promise<void>;
   quickConnect(): void;
@@ -15,6 +17,7 @@ const icons = {
   home: '<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
   server: '<rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M15 6.5h2M15 17.5h2"/>',
   terminal: '<path d="m5 6 6 6-6 6m8 0h6"/>',
+  folder: '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 9h18"/>',
   shield: '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
   search: '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
@@ -46,8 +49,9 @@ export class Dashboard {
       </header>
       <div class="home-layout">
         <nav class="home-rail" aria-label="主导航">
-          <button class="rail-item selected" aria-current="page">${icon('home')}<span>总览</span></button>
+          <button class="rail-item selected" id="rail-overview" aria-current="page">${icon('home')}<span>总览</span></button>
           <button class="rail-item" id="rail-hosts">${icon('server')}<span>主机</span></button>
+          <button class="rail-item" id="rail-files">${icon('folder')}<span>文件管理</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
           <span class="rail-security" title="管理员身份认证">${icon('shield')}<span id="auth-provider-label">身份<br>保护</span></span>
         </nav>
@@ -100,6 +104,7 @@ export class Dashboard {
         </form>
       </dialog>`;
     document.body.prepend(this.root);
+    this.get('.home-layout').append(this.actions.files.root);
     this.dialog = this.get<HTMLDialogElement>('.host-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
     this.get('#account-action').addEventListener('click', async (event) => {
@@ -117,9 +122,16 @@ export class Dashboard {
     this.dialog.addEventListener('close', () => { this.form.reset(); this.editing = undefined; this.returnFocus?.focus(); });
     this.get('#host-search').addEventListener('input', () => this.renderList());
     this.get('#refresh-hosts').addEventListener('click', () => void this.refresh());
-    this.get('#rail-hosts').addEventListener('click', () => this.get<HTMLInputElement>('#host-search').focus());
+    for (const id of ['#rail-overview', '#rail-hosts']) this.get(id).addEventListener('click', () => {
+      if (!this.actions.files.confirmLeave()) return;
+      if (!this.isHome) this.actions.leaveWorkspace();
+      this.show();
+      if (id === '#rail-hosts') this.get<HTMLInputElement>('#host-search').focus();
+    });
+    this.get('#rail-files').addEventListener('click', () => this.showFiles());
     for (const id of ['#quick-connect', '#bottom-quick']) this.get(id).addEventListener('click', () => {
-      if (this.busy) return;
+      if (this.busy || !this.actions.files.confirmLeave()) return;
+      this.actions.leaveWorkspace();
       this.openWorkspace(); this.actions.quickConnect();
     });
     this.field('authMethod').addEventListener('change', () => this.updateCredentialFields());
@@ -137,8 +149,15 @@ export class Dashboard {
     });
     const back = document.createElement('button');
     back.className = 'icon-button home-back'; back.textContent = '← 主机总览'; back.type = 'button';
-    back.addEventListener('click', () => { this.actions.leaveWorkspace(); this.show(); void this.refresh(); });
+    back.addEventListener('click', () => {
+      if (!this.actions.files.confirmLeave()) return;
+      this.actions.leaveWorkspace(); this.show(); void this.refresh();
+    });
     document.querySelector('#app .topbar-actions')!.prepend(back);
+    const files = document.createElement('button');
+    files.className = 'icon-button home-back'; files.textContent = '文件管理'; files.type = 'button';
+    files.addEventListener('click', () => this.showFiles());
+    document.querySelector('#app .topbar-actions')!.prepend(files);
     this.show();
   }
 
@@ -171,6 +190,7 @@ export class Dashboard {
 
   setHosts(hosts: CloudHost[]): void {
     this.hosts = hosts;
+    this.actions.files.setHosts(hosts);
     if (this.group && !hosts.some((host) => host.group === this.group)) this.group = '';
     this.renderFilters(); this.renderList();
     this.globe?.setHosts(hosts);
@@ -187,13 +207,17 @@ export class Dashboard {
   }
 
   show(): void {
+    this.actions.files.hide();
     this.isHome = true; this.root.hidden = false;
+    this.get('.home-content').hidden = false;
+    this.selectNavigation('rail-overview');
     document.getElementById('app')!.hidden = true;
     document.body.dataset.view = 'dashboard';
     this.globe?.setActive(!this.paused);
   }
 
   openWorkspace(): void {
+    this.actions.files.hide();
     this.isHome = false; this.root.hidden = true;
     document.getElementById('app')!.hidden = false;
     document.body.dataset.view = 'workspace';
@@ -201,11 +225,30 @@ export class Dashboard {
     window.dispatchEvent(new Event('resize'));
   }
 
+  showFiles(): void {
+    this.isHome = false; this.root.hidden = false;
+    this.get('.home-content').hidden = true;
+    document.getElementById('app')!.hidden = true;
+    document.body.dataset.view = 'files';
+    this.selectNavigation('rail-files');
+    this.globe?.setActive(false);
+    this.actions.files.show();
+  }
+
+  private selectNavigation(id: string): void {
+    this.root.querySelectorAll<HTMLElement>('.rail-item').forEach((button) => {
+      button.classList.toggle('selected', button.id === id);
+      if (button.id === id) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
   private notice(message: string): void {
     const notice = this.get('#home-notice'); notice.textContent = message; notice.hidden = false;
   }
 
   private signedOut(): void {
+    this.actions.leaveWorkspace();
     this.authenticated = false;
     this.get('#account-label').textContent = '未登录';
     const action = this.get<HTMLAnchorElement>('#account-action');

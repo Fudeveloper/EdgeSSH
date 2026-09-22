@@ -59,6 +59,12 @@ jobs:
       - name: Check project
         run: npm run check
 
+      # 在模拟协议上回归共享文件组件，防止页面改动破坏终端侧栏或误操作真实主机。
+      - name: Check file manager in desktop and mobile browsers
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:browser -- --workers=2
+
       - name: Configure selected login, provision D1, migrate and deploy Worker
         run: npm run deploy
         env:
