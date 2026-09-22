@@ -1,36 +1,39 @@
 # EdgeSSH 部署与验收
 
-## 先选择一种登录方式
+## 先确定入口并选择一种登录方式
 
 本项目只有一个管理员、一份主机资料库。`AUTH_PROVIDER` 决定唯一生效的认证方式，不同时维护两套登录状态。两种方式都部署到 Cloudflare Workers，但 **GitHub 模式不需要 Zero Trust 或 Access 权限**。
 
-在 GitHub **Settings > Secrets and variables > Actions** 配置：
+多数用户建议先准备自定义域名，例如 `ssh.example.com`。在 GitHub **设置（Settings）> 机密和变量（Secrets and variables）> Actions** 配置：
 
 | 名称 | 类型 | Cloudflare 模式 | GitHub 模式 |
 | --- | --- | --- | --- |
 | `AUTH_PROVIDER` | Variable | `cloudflare`（默认） | `github` |
 | `CLOUDFLARE_API_TOKEN` | Secret | 必填 | 必填 |
+| `CUSTOM_DOMAIN` | Variable | 推荐填写实际主机名 | 推荐填写实际主机名 |
 | `ADMIN_EMAIL` | Variable | 管理员邮箱 | 不需要 |
 | `GITHUB_CLIENT_ID` | Variable | 不需要 | OAuth App 的 Client ID |
 | `GITHUB_CLIENT_SECRET` | Secret | 不需要 | OAuth App 的 Client Secret |
 | `GITHUB_ADMIN` | Variable | 不需要 | 允许登录的唯一 GitHub 用户名，不是邮箱或组织名 |
+
+`CUSTOM_DOMAIN` 只填完整主机名，不带 `https://`、路径或通配符。域名必须由部署账户的 Cloudflare Zone 管理；Action 会自动绑定 Worker，Cloudflare 负责 DNS 与证书。需要使用免费 `workers.dev` 地址时将它留空，不能填写 `*.workers.dev`。
 
 敏感值不要放 Variable。工作流只校验所选方式的配置，另一种方式的旧配置不会参与认证。
 
 ## Cloudflare 模式准备
 
 1. 在 Cloudflare **启用 Zero Trust**，完成团队域名与计划初始化。组织开通涉及账户确认，不由脚本代办。
-2. Fork 本仓库，启用 GitHub Actions，在 **Settings > Secrets and variables > Actions** 保存 `CLOUDFLARE_API_TOKEN` Secret。
-3. 在 **Actions > Deploy > Run workflow** 输入管理员邮箱，运行并等待摘要给出访问地址。可将邮箱保存为 `ADMIN_EMAIL` Variable，省去重复输入。
+2. Fork 本仓库，启用 GitHub Actions，在 **设置（Settings）> 机密和变量（Secrets and variables）> Actions** 保存 `CLOUDFLARE_API_TOKEN` Secret，并按上表保存 `CUSTOM_DOMAIN` 与 `AUTH_PROVIDER` Variable。
+3. 在 **Actions > Deploy > 运行工作流（Run workflow）** 输入管理员邮箱，运行并等待摘要给出访问地址。可将邮箱保存为 `ADMIN_EMAIL` Variable，省去重复输入。
 
-无需手动创建 Access 应用、OTP、D1，也无需抄录 Account ID、Team Domain 或 AUD。默认入口是 `https://edgessh.<账户子域>.workers.dev`。没有自定义域名也能使用。
+无需手动创建 Access 应用、OTP、D1，也无需抄录 Account ID、Team Domain 或 AUD。填写 `CUSTOM_DOMAIN` 时使用自定义域名；留空才使用 `https://edgessh.<账户子域>.workers.dev`。
 
 ## GitHub 模式准备
 
-1. 打开 GitHub **Settings > Developer settings > OAuth Apps > New OAuth App**。
-2. Application name 自定；Homepage URL 填 EdgeSSH 地址，Authorization callback URL 填 `https://你的入口/auth/callback`。
+1. 打开 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）> 新建 OAuth 应用（New OAuth App）**。
+2. **应用名称（Application name）**自定；**主页 URL（Homepage URL）**填 EdgeSSH 地址，**授权回调 URL（Authorization callback URL）**填 `https://你的入口/auth/callback`。
 3. 保存 Client ID，生成一个 Client Secret，按上表分别保存到 Actions Variable 和 Secret。
-4. 设置 `AUTH_PROVIDER=github`、`GITHUB_ADMIN=你的GitHub用户名`，保存 Cloudflare API Token，然后运行 **Actions > Deploy**。邮箱输入框留空。
+4. 设置 `AUTH_PROVIDER=github`、`CUSTOM_DOMAIN=你的主机名`、`GITHUB_ADMIN=你的GitHub用户名`，保存 Cloudflare API Token，然后运行 **Actions > Deploy**。使用 `workers.dev` 时才省略 `CUSTOM_DOMAIN`；邮箱输入框留空。
 5. 若首次部署前不知道入口，可先为 OAuth App 使用占位 URL；部署后将 Action 摘要中的正式入口与回调地址复制回 OAuth App 设置，再登录。
 
 GitHub OAuth App 必须由用户在 GitHub 创建；普通 GitHub Token 没有官方“创建 OAuth App”的 REST 接口，工作流不会假装自动完成它。
@@ -39,20 +42,20 @@ GitHub OAuth App 必须由用户在 GitHub 创建；普通 GitHub Token 没有�
 
 ## API Token 权限
 
-以 Cloudflare **Edit Cloudflare Workers** 模板为起点，保留部署所需权限，并补齐以下账户权限。控制台的 Edit/Read 对应 API 文档的 Write/Read。
+在 Cloudflare **我的个人资料（My Profile）> API 令牌（API Tokens）> 创建令牌（Create Token）**，以 **编辑 Cloudflare Workers（Edit Cloudflare Workers）** 模板为起点，保留部署所需权限，并补齐以下账户权限。Cloudflare 中文界面可能仍显示部分英文；下表同时保留英文原名。控制台的编辑（Edit）/读取（Read）对应 API 文档的 Write/Read。
 
-| 账户权限 | 级别 | 用途 |
+| 账户（Account）权限 | 级别 | 用途 |
 | --- | --- | --- |
-| Workers Scripts | Edit | Worker、Durable Object、Secret 和子域部署 |
-| Workers KV Storage | Edit | 保留官方 Workers 模板的部署权限 |
-| Account Settings | Read | 自动发现账户 |
-| D1 | Edit | 查找/创建数据库、检查旧数据与执行迁移 |
-| Access: Apps and Policies | Edit | **仅 cloudflare 模式**：查找/创建应用及邮箱策略 |
-| Access: Organizations, Identity Providers, and Groups | Edit | **仅 cloudflare 模式**：获取团队域名、查找/创建 OTP |
+| Workers 脚本（Workers Scripts） | 编辑（Edit） | Worker、Durable Object、Secret 和子域部署 |
+| Workers KV 存储（Workers KV Storage） | 编辑（Edit） | 保留官方 Workers 模板的部署权限 |
+| 账户设置（Account Settings） | 读取（Read） | 自动发现账户 |
+| D1 | 编辑（Edit） | 查找/创建数据库、检查旧数据与执行迁移 |
+| Access：应用和策略（Apps and Policies） | 编辑（Edit） | **仅 cloudflare 模式**：查找/创建应用及邮箱策略 |
+| Access：组织、身份提供程序和组（Organizations, Identity Providers, and Groups） | 编辑（Edit） | **仅 cloudflare 模式**：获取团队域名、查找/创建 OTP |
 
 账户资源只选择实际部署账户。若 Token 可访问多个账户，设置 Actions Variable `CLOUDFLARE_ACCOUNT_ID`，脚本不会猜测目标账户。
 
-只用 `workers.dev` 不需要自定义域名的 Zone 权限。使用 `CUSTOM_DOMAIN` 时，还需模板的 **Zone > Workers Routes: Edit、Zone: Read**，并将区域范围限定到该域名所在 Zone。域名必须已经由同账户的 Cloudflare 管理。
+只用 `workers.dev` 不需要自定义域名的区域权限。使用 `CUSTOM_DOMAIN` 时，还需模板的 **区域（Zone）> Workers 路由（Workers Routes）：编辑（Edit）、区域（Zone）：读取（Read）**，并将区域资源范围限定到该域名所在 Zone。域名必须已经由同账户的 Cloudflare 管理。
 
 API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入框。不要将 Token 填到 Run workflow 的邮箱字段。
 
@@ -60,7 +63,7 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 
 1. 校验本地配置，运行类型检查、测试、前端构建和 Wrangler dry-run。
 2. 自动发现唯一账户（显式账户 ID 优先），读取现有 Worker Secret **名称**，不尝试读取密钥明文。
-3. 默认读取账户 `workers.dev` 子域；未注册时自动注册确定性名称。已有子域不改名，避免影响其他 Worker。
+3. 有 `CUSTOM_DOMAIN` 时使用该入口；否则读取账户 `workers.dev` 子域，未注册时自动注册确定性名称。已有子域不改名，避免影响其他 Worker。
 4. 根据 `AUTH_PROVIDER` 仅准备所选认证：Cloudflare 配置 Access/OTP/Allow，GitHub 验证指定管理员并准备 OAuth Secret。
 5. GitHub 模式不调用 Zero Trust API；Cloudflare 模式不需要 GitHub OAuth 参数。既有 Access 应用不重写人工 IdP 配置。
 6. 按 ID 或名称复用 D1，不存在才创建；指定 ID 不存在时直接失败，不用新空库替代。
@@ -72,7 +75,7 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 
 设置自定义域名时关闭备用 `workers.dev` 入口，所有部署关闭 preview URL。Cloudflare 模式校验 Access JWT；GitHub 模式使用 state、PKCE 和签名 HttpOnly Cookie。缺少认证不降级为匿名 SSH。
 
-## 可选配置
+## 其他可选配置
 
 | 名称 | GitHub 位置 | 默认/示例 |
 | --- | --- | --- |
@@ -81,7 +84,6 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 | `WORKER_NAME` | Variable | `edgessh` |
 | `D1_DATABASE_NAME` | Variable | `<Worker 名>-accounts` |
 | `D1_DATABASE_ID` | Variable | 指定已有 D1 UUID，不填则按名称查找 |
-| `CUSTOM_DOMAIN` | Variable，兼容 Secret | `ssh.example.com`；Secret 优先；`*.workers.dev` 不可填 |
 | `ACCESS_IDP_IDS` | Variable | 新应用采用的 IdP UUID，多个用逗号分隔 |
 | `ENCRYPTION_KEY` | Secret，仅恢复/迁移使用 | 仅 Worker 尚无密钥时使用；已有密钥不会覆盖 |
 

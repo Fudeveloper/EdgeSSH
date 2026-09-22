@@ -101,30 +101,34 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 
 - Node.js **22.12.0 或更高版本**，以及 npm。
 - 可使用 Workers、Durable Objects 与 D1 的 Cloudflare 账户。
-- 选择 Cloudflare Access 或原生 GitHub OAuth。GitHub 模式不需要开通 Zero Trust，自定义域名可选。
+- 准备一个由同一 Cloudflare 账户管理的自定义域名（推荐），或使用自动分配的 `workers.dev` 地址。
+- 选择 Cloudflare Access 或原生 GitHub OAuth。GitHub 模式不需要开通 Zero Trust。
 - 一台你有权访问的公网 SSH 服务器。
 
 ### 一次运行，自动配置认证与部署
 
-在 Fork 的 **Settings > Secrets and variables > Actions** 设置 `AUTH_PROVIDER` Variable，二选一；未填写时默认 `cloudflare`，兼容旧部署。两种模式都将应用部署到 Cloudflare Workers，**不是选择云服务商**。
+在 Fork 的 **设置（Settings）> 机密和变量（Secrets and variables）> Actions** 设置 `AUTH_PROVIDER` Variable，二选一；未填写时默认 `cloudflare`，兼容旧部署。两种模式都将应用部署到 Cloudflare Workers，**不是选择云服务商**。
 
 | 配置 | GitHub 位置 | `cloudflare` | `github` |
 | --- | --- | --- | --- |
 | `AUTH_PROVIDER` | Variable | `cloudflare` | `github` |
 | `CLOUDFLARE_API_TOKEN` | Secret | 必填 | 必填，不需要 Access 权限 |
+| `CUSTOM_DOMAIN` | Variable | 推荐，如 `ssh.example.com` | 推荐，如 `ssh.example.com` |
 | `ADMIN_EMAIL` | Variable | 管理员邮箱，也可在 Run workflow 输入 | 不填 |
 | `GITHUB_CLIENT_ID` | Variable | 不填 | OAuth App 的 Client ID |
 | `GITHUB_CLIENT_SECRET` | Secret | 不填 | OAuth App 的 Client Secret |
 | `GITHUB_ADMIN` | Variable | 不填 | 唯一允许登录的 GitHub 用户名 |
 
-**Cloudflare 模式**：先启用 Zero Trust，然后运行 Action，自动配置 Access 应用、邮箱 Allow 策略和 OTP。
+`CUSTOM_DOMAIN` 只填主机名，不带 `https://`、路径或通配符。域名需要由部署账户的 Cloudflare Zone 管理，Token 需要该 Zone 的 Workers Routes 编辑和 Zone 读取权限；Action 会自动绑定 Worker，Cloudflare 负责 DNS 与证书。确实使用 `workers.dev` 时才将它留空，且不要把 `*.workers.dev` 填进去。
 
-**GitHub 模式**：先在 GitHub **Settings > Developer settings > OAuth Apps** 创建一个 OAuth App，回调地址填 `https://你的入口/auth/callback`。工作流会自动解析管理员数字 ID，跳过全部 Zero Trust 配置。入口尚不确定时，可先使用占位回调地址，部署后从 Action 摘要复制正式地址，再回 GitHub 更新。详情见[部署指南](DEPLOYMENT.md)。
+**Cloudflare 模式**：先在 Cloudflare 控制台启用 Zero Trust，然后运行 Action，自动配置 Access 应用、邮箱 Allow 策略和 OTP。
+
+**GitHub 模式**：先在 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）** 创建一个 OAuth App，回调地址填 `https://你的入口/auth/callback`。工作流会自动解析管理员数字 ID，跳过全部 Zero Trust 配置。入口尚不确定时，可先使用占位回调地址，部署后从 Action 摘要复制正式地址，再回 GitHub 更新。详情见[部署指南](DEPLOYMENT.md)。
 
 ```text
-选择登录方式 + 填写对应变量/Secret
+确定自定义域名（或使用 workers.dev）+ 选择登录方式 + 填写对应变量/Secret
     ↓ Run workflow
-发现账户与 workers.dev 子域 → 仅配置所选认证方式
+发现账户并绑定自定义域名（或获取 workers.dev 子域）→ 仅配置所选认证方式
     → 创建/复用 D1 → 保留管理员资料归属 → 首次生成加密密钥
     → 数据库迁移 → 写入 Worker Secrets → 部署 Worker
     ↓
@@ -143,7 +147,7 @@ cd EdgeSSH
 npm ci
 ```
 
-### 可选配置
+### 其他可选配置
 
 以下通常都可以留空，保存为 Actions Variable：
 
@@ -154,7 +158,6 @@ npm ci
 | `WORKER_NAME` | `my-edgessh` | 默认 `edgessh` |
 | `D1_DATABASE_NAME` | `my-edgessh-accounts` | 默认 `<Worker 名>-accounts` |
 | `D1_DATABASE_ID` | `00000000-0000-4000-8000-000000000001` | 复用明确指定的数据库 |
-| `CUSTOM_DOMAIN` | `ssh.example.com` | 真正的自定义域名；`*.workers.dev` 必须留空；兼容 Secret，Secret 优先 |
 | `ACCESS_IDP_IDS` | `一个或多个 IdP UUID，以逗号分隔` | 创建新应用时使用已有 GitHub/其他 IdP，而非自动配置 OTP |
 
 `ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**；Cloudflare 模式另存 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`，GitHub 模式同步 `GITHUB_CLIENT_SECRET`。不需要用户复制自动生成的值回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
