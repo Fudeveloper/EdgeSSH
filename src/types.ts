@@ -49,8 +49,14 @@ export interface TerminalSize {
 export interface Env {
   DB: D1Database;
   ENCRYPTION_KEY: string;
-  ACCESS_TEAM_DOMAIN: string;
-  ACCESS_AUD: string;
+  AUTH_PROVIDER?: string;
+  ADMIN_ACCOUNT_ID?: string;
+  APP_ORIGIN?: string;
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GITHUB_ADMIN_ID?: string;
   SSH_SESSIONS: DurableObjectNamespace;
   ASSETS?: Fetcher;
   CONNECT_TIMEOUT_MS?: string;

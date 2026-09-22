@@ -30,6 +30,7 @@ export class Dashboard {
   private busy = false;
   private isHome = true;
   private paused = false;
+  private authenticated = false;
   private returnFocus?: HTMLElement;
   private readonly dialog: HTMLDialogElement;
   private readonly form: HTMLFormElement;
@@ -41,14 +42,14 @@ export class Dashboard {
         <a class="home-brand" href="/" aria-label="EdgeSSH 首页"><span class="brand-chevron">›_</span>Edge<span>SSH</span></a>
         <label class="home-search">${icon('search')}<input id="host-search" type="search" placeholder="搜索主机、分组或 IP 地址" aria-label="搜索主机"><kbd>Ctrl K</kbd></label>
         <button class="home-button primary header-add" data-add>＋ 新建主机</button>
-        <div class="home-account"><span class="account-avatar">A</span><span id="account-label">验证身份中</span><a href="/cdn-cgi/access/logout" title="退出 Access">退出</a></div>
+        <div class="home-account"><span class="account-avatar">A</span><span id="account-label">验证身份中</span><a id="account-action" href="/auth/login" title="管理员登录">登录</a></div>
       </header>
       <div class="home-layout">
         <nav class="home-rail" aria-label="主导航">
           <button class="rail-item selected" aria-current="page">${icon('home')}<span>总览</span></button>
           <button class="rail-item" id="rail-hosts">${icon('server')}<span>主机</span></button>
           <button class="rail-item" id="quick-connect">${icon('terminal')}<span>快速连接</span></button>
-          <span class="rail-security" title="Cloudflare Access 身份认证">${icon('shield')}<span>Access<br>已保护</span></span>
+          <span class="rail-security" title="管理员身份认证">${icon('shield')}<span id="auth-provider-label">身份<br>保护</span></span>
         </nav>
         <main class="home-content">
           <div id="home-notice" class="home-notice" role="status" hidden></div>
@@ -67,7 +68,7 @@ export class Dashboard {
             </section>
           </div>
           <section class="home-bottom" aria-label="存储与连接信息">
-            <div class="storage-note">${icon('shield')}<div><strong>凭据留在你的加密保险箱</strong><p>Cloudflare Access 认证 · D1 加密存储 · 密钥仅在 Worker</p></div><span class="storage-tag">AES-256-GCM</span></div>
+            <div class="storage-note">${icon('shield')}<div><strong>凭据留在你的加密保险箱</strong><p>管理员认证 · D1 加密存储 · 密钥仅在 Worker</p></div><span class="storage-tag">AES-256-GCM</span></div>
             <button class="quick-card" id="bottom-quick">${icon('terminal')}<span><strong>临时连接</strong><small>打开完整 SSH 工作台</small></span><span>↗</span></button>
           </section>
           <footer class="home-footer"><span>EdgeSSH / Private workspace</span><span>首次保存时查询公网 IP 位置，失败时仍可连接。</span><a href="https://mappojs.com/" target="_blank" rel="noopener noreferrer">地图数据与灵感来自 Mappo.js</a></footer>
@@ -101,6 +102,15 @@ export class Dashboard {
     document.body.prepend(this.root);
     this.dialog = this.get<HTMLDialogElement>('.host-dialog');
     this.form = this.get<HTMLFormElement>('#cloud-host-form');
+    this.get('#account-action').addEventListener('click', async (event) => {
+      if (!this.authenticated) return;
+      event.preventDefault();
+      try {
+        const { redirect } = await api<{ redirect: string }>('/api/auth/logout', 'POST');
+        location.assign(redirect);
+      } catch (error) { this.notice(error instanceof Error ? error.message : '退出失败，请重试。'); }
+    });
+    window.addEventListener('auth-required', () => this.signedOut());
     this.root.querySelectorAll<HTMLButtonElement>('[data-add]').forEach((button) => button.addEventListener('click', () => this.openEditor()));
     this.root.querySelectorAll('.close-dialog').forEach((button) => button.addEventListener('click', () => this.closeEditor()));
     this.dialog.addEventListener('cancel', (event) => { if (this.busy) event.preventDefault(); });
@@ -139,15 +149,17 @@ export class Dashboard {
 
   async start(): Promise<void> {
     try {
-      const { account } = await api<{ account: { username: string } }>('/api/auth/me');
+      const { account, provider } = await api<{ account: { username: string }; provider: string }>('/api/auth/me');
+      this.authenticated = true;
       this.get('#account-label').textContent = account.username;
       this.get('.account-avatar').textContent = account.username.slice(0, 1).toUpperCase();
+      this.get('#auth-provider-label').textContent = provider === 'github' ? 'GitHub' : 'Access';
+      const action = this.get<HTMLAnchorElement>('#account-action');
+      action.textContent = '退出'; action.title = '退出登录'; action.href = '/api/auth/logout';
       await this.refresh();
     } catch (error) {
-      this.notice(error instanceof Error ? error.message : '无法验证 Access 身份。');
-      this.get('#account-label').textContent = '未认证';
-      this.get('#host-list').textContent = '请先通过 Cloudflare Access 登录。';
-      this.root.querySelectorAll<HTMLButtonElement>('[data-add], #quick-connect, #bottom-quick').forEach((button) => { button.disabled = true; });
+      this.signedOut();
+      this.notice(error instanceof Error ? error.message : '无法验证管理员身份。');
     }
     try {
       const { HostGlobe } = await import('./globe');
@@ -191,6 +203,17 @@ export class Dashboard {
 
   private notice(message: string): void {
     const notice = this.get('#home-notice'); notice.textContent = message; notice.hidden = false;
+  }
+
+  private signedOut(): void {
+    this.authenticated = false;
+    this.get('#account-label').textContent = '未登录';
+    const action = this.get<HTMLAnchorElement>('#account-action');
+    action.href = '/auth/login'; action.textContent = '登录'; action.title = '管理员登录';
+    this.setHosts([]);
+    this.get('#host-list').textContent = '请点击右上角「登录」验证管理员身份。';
+    this.root.querySelectorAll<HTMLButtonElement>('[data-add], #quick-connect, #bottom-quick').forEach((button) => { button.disabled = true; });
+    this.show();
   }
 
   private renderFilters(): void {

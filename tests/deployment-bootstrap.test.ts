@@ -8,7 +8,7 @@ import type { DeploymentSettings } from '../scripts/deployment-config.ts';
 const settings: DeploymentSettings = {
   accountId: 'a'.repeat(32), apiToken: 'test-token', workerName: 'edgessh',
   databaseName: 'edgessh-accounts', adminEmail: 'admin@example.com',
-  identityProviderIds: [], secrets: {},
+  authProvider: 'cloudflare', identityProviderIds: [], secrets: {},
 };
 const database = { uuid: 'test-database', name: settings.databaseName };
 const json = (result: unknown) => Response.json({ success: true, result });

@@ -70,7 +70,7 @@
 ### 不只是一个终端
 
 - **边缘原生**：Worker 通过 Cloudflare TCP Sockets 直接连接 SSH 服务器，无需额外部署 SSH 中转服务，每个会话由 Durable Object 隔离。
-- **身份保护**：使用 Cloudflare Zero Trust Access 认证管理员，不提供匿名连接入口或本地注册登录。
+- **身份保护**：Cloudflare Access 与原生 GitHub OAuth 二选一，只允许管理员登录；切换方式仍使用同一份主机资料。
 - **加密存储**：主机资料、密码、私钥与指纹通过 AES-256-GCM 加密后保存到 D1，浏览器不持久化连接凭据。
 - **指纹确认**：首次连接时展示服务器 SHA-256 指纹，确认后才发送 SSH 凭据。
 - **灵活连接**：支持密码、单密码提示的 keyboard-interactive，以及未加密 OpenSSH 私钥认证；支持 UTF-8、GB18030、Big5 终端编码。
@@ -80,7 +80,7 @@
 
 ```text
 浏览器 · 主机总览 / xterm.js / SFTP / 进程面板
-    │ HTTPS / WebSocket · Cloudflare Access 身份认证
+    │ HTTPS / WebSocket · Cloudflare Access 或 GitHub OAuth
     ▼
 Cloudflare Worker
     ├── 静态资源与 API
@@ -101,30 +101,39 @@ SSH 握手、密钥交换、认证与通道逻辑在 Worker 内完成。浏览�
 
 - Node.js **22.12.0 或更高版本**，以及 npm。
 - 可使用 Workers、Durable Objects 与 D1 的 Cloudflare 账户。
-- 已启用 Cloudflare Zero Trust 的账户。无需手动创建 Access 应用，自定义域名可选。
+- 选择 Cloudflare Access 或原生 GitHub OAuth。GitHub 模式不需要开通 Zero Trust，自定义域名可选。
 - 一台你有权访问的公网 SSH 服务器。
 
 ### 一次运行，自动配置认证与部署
 
-你只需准备三项：
+在 Fork 的 **Settings > Secrets and variables > Actions** 设置 `AUTH_PROVIDER` Variable，二选一；未填写时默认 `cloudflare`，兼容旧部署。两种模式都将应用部署到 Cloudflare Workers，**不是选择云服务商**。
 
-1. **启用 Cloudflare Zero Trust**，完成团队域名和账户计划的初始化。
-2. 在 Fork 后仓库的 **Settings > Secrets and variables > Actions** 添加 Secret：`CLOUDFLARE_API_TOKEN`。权限清单见[部署指南](DEPLOYMENT.md#api-token-权限)。
-3. 打开 **Actions > Deploy > Run workflow**，填写管理员邮箱并运行。也可预先将邮箱保存为 `ADMIN_EMAIL` Variable。
+| 配置 | GitHub 位置 | `cloudflare` | `github` |
+| --- | --- | --- | --- |
+| `AUTH_PROVIDER` | Variable | `cloudflare` | `github` |
+| `CLOUDFLARE_API_TOKEN` | Secret | 必填 | 必填，不需要 Access 权限 |
+| `ADMIN_EMAIL` | Variable | 管理员邮箱，也可在 Run workflow 输入 | 不填 |
+| `GITHUB_CLIENT_ID` | Variable | 不填 | OAuth App 的 Client ID |
+| `GITHUB_CLIENT_SECRET` | Secret | 不填 | OAuth App 的 Client Secret |
+| `GITHUB_ADMIN` | Variable | 不填 | 唯一允许登录的 GitHub 用户名 |
+
+**Cloudflare 模式**：先启用 Zero Trust，然后运行 Action，自动配置 Access 应用、邮箱 Allow 策略和 OTP。
+
+**GitHub 模式**：先在 GitHub **Settings > Developer settings > OAuth Apps** 创建一个 OAuth App，回调地址填 `https://你的入口/auth/callback`。工作流会自动解析管理员数字 ID，跳过全部 Zero Trust 配置。入口尚不确定时，可先使用占位回调地址，部署后从 Action 摘要复制正式地址，再回 GitHub 更新。详情见[部署指南](DEPLOYMENT.md)。
 
 ```text
-Zero Trust 已启用 + Cloudflare API Token + 管理员邮箱
+选择登录方式 + 填写对应变量/Secret
     ↓ Run workflow
-发现账户与 workers.dev 子域 → 创建/复用 Access 应用、邮箱 Allow 策略与 OTP
-    → 获取 Team Domain 与 AUD → 创建/复用 D1 → 首次生成加密密钥
+发现账户与 workers.dev 子域 → 仅配置所选认证方式
+    → 创建/复用 D1 → 保留管理员资料归属 → 首次生成加密密钥
     → 数据库迁移 → 写入 Worker Secrets → 部署 Worker
     ↓
-在 Actions 运行摘要打开访问地址，用邮箱验证码登录
+在 Actions 运行摘要打开访问地址，使用所选方式登录
 ```
 
 无需手填 Account ID、D1 ID、Team Domain、AUD 或随机密钥。Token 能访问多个账户时，才需要用 `CLOUDFLARE_ACCOUNT_ID` 选择目标账户。
 
-EdgeSSH 面向**单管理员**，不允许匿名访问。重复运行复用资源和加密密钥，不删除数据；已有 Access 应用的登录方式及人工策略不会被覆盖。以后可在 Access 添加 GitHub 等身份提供程序，无需修改 Worker 的 JWT 校验逻辑。
+EdgeSSH 面向**单管理员**，不允许匿名访问。两种认证不会同时生效；切换方式不改数据库、资料所有者或加密密钥。旧库只有一个所有者时自动沿用原 ID，新库使用固定管理员 ID。若原域名已有 Access 网关，改 GitHub 前需要解除该域名的旧 Access 保护；工作流不会擅自删除安全策略。
 
 ### 获取项目
 
@@ -148,7 +157,7 @@ npm ci
 | `CUSTOM_DOMAIN` | `ssh.example.com` | 真正的自定义域名；`*.workers.dev` 必须留空；兼容 Secret，Secret 优先 |
 | `ACCESS_IDP_IDS` | `一个或多个 IdP UUID，以逗号分隔` | 创建新应用时使用已有 GitHub/其他 IdP，而非自动配置 OTP |
 
-`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`、`ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**，不需要用户复制回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
+`ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**；Cloudflare 模式另存 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`，GitHub 模式同步 `GITHUB_CLIENT_SECRET`。不需要用户复制自动生成的值回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
 
 推送 `main` 或手动运行 `Deploy` 都会执行检查和部署。只在首次 Run workflow 输入邮箱也可以：后续未提供邮箱时保留已有认证配置。需要更换域名或重新自动配置 Access 时，请再次提供邮箱。完整权限、旧版迁移及 GitHub 登录扩展说明见[部署指南](DEPLOYMENT.md)；手工维护见 [Zero Trust 指南](docs/ZERO_TRUST.md)。
 
@@ -199,10 +208,10 @@ EdgeSSH/
 ### 安全边界
 
 - **不是端到端加密**：Worker 是实际的 SSH 客户端，会在会话内处理明文凭据。请仅部署到可信账户，并使用最小权限的 SSH 账号或密钥。
-- 主机资料绑定 Access 身份；会话使用一次性票据，辅助通道使用附着令牌，并检查同源请求。
+- 主机资料绑定固定管理员 ID，不随认证来源切换；会话使用一次性票据，辅助通道使用附着令牌，并检查同源请求。
 - 连接目标仅限公网地址；域名解析后校验目标 IP，降低 SSRF 与 DNS 重绑定风险。
 - 地理定位会向外部定位服务发送服务器公网 IP，不发送 SSH 凭据或命令；位置点位**不代表在线状态**。
-- `workers.dev` 与自定义域名都可以作为正式入口，但所选入口必须由对应的 Cloudflare Access 应用保护；不要把未受 Access 保护的地址当作公开 SSH 入口。
+- `workers.dev` 与自定义域名都可以作为正式入口。Cloudflare 模式需要对应 Access 应用；GitHub 模式由 Worker 的管理员授权与 HttpOnly 会话保护，两者都不允许匿名 SSH。
 
 ### 当前支持范围
 

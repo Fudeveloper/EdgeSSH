@@ -1,6 +1,6 @@
 import type { TomlTable } from 'smol-toml';
 
-export const runtimeSecretNames = ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'] as const;
+export const runtimeSecretNames = ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD', 'GITHUB_CLIENT_SECRET'] as const;
 export type RuntimeSecrets = Record<(typeof runtimeSecretNames)[number], string>;
 
 export interface DeploymentSettings {
@@ -10,6 +10,9 @@ export interface DeploymentSettings {
   databaseName: string;
   databaseId?: string;
   customDomain?: string;
+  authProvider: 'cloudflare' | 'github';
+  githubClientId?: string;
+  githubAdmin?: string;
   adminEmail?: string;
   identityProviderIds: string[];
   secrets: Partial<RuntimeSecrets>;
@@ -24,7 +27,9 @@ export function readDeploymentSettings(
   template: TomlTable,
   env: NodeJS.ProcessEnv,
 ): DeploymentSettings {
-  const required = ['CLOUDFLARE_API_TOKEN'];
+  const authProvider = env.AUTH_PROVIDER?.trim() || 'cloudflare';
+  if (authProvider !== 'cloudflare' && authProvider !== 'github') throw new Error('AUTH_PROVIDER 只能是 cloudflare 或 github。');
+  const required = ['CLOUDFLARE_API_TOKEN', ...(authProvider === 'github' ? ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GITHUB_ADMIN'] : [])];
   const missing = required.filter((name) => !env[name]?.trim());
   if (missing.length) throw new Error(`缺少部署配置：${missing.join(', ')}。请在 GitHub Actions 中配置。`);
 
@@ -52,15 +57,23 @@ export function readDeploymentSettings(
     throw new Error('CUSTOM_DOMAIN 不能填写 workers.dev 地址；使用 Worker 自带域名时请删除或留空该配置。');
   }
 
-  const adminEmail = env.ADMIN_EMAIL?.trim().toLowerCase();
+  const adminEmail = authProvider === 'cloudflare' ? env.ADMIN_EMAIL?.trim().toLowerCase() : undefined;
   if (adminEmail && !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(adminEmail)) {
     throw new Error('ADMIN_EMAIL 必须是一个完整的管理员邮箱，不能填写多个邮箱或整个域名。');
   }
-  const identityProviderIds = [...new Set((env.ACCESS_IDP_IDS || '').split(',').map((id) => id.trim()).filter(Boolean))];
+  const identityProviderIds = authProvider === 'cloudflare'
+    ? [...new Set((env.ACCESS_IDP_IDS || '').split(',').map((id) => id.trim()).filter(Boolean))] : [];
   if (identityProviderIds.some((id) => !/^[a-f0-9-]{36}$/i.test(id))) {
     throw new Error('ACCESS_IDP_IDS 必须是逗号分隔的 Cloudflare 身份提供程序 UUID。');
   }
-  const secrets = Object.fromEntries(runtimeSecretNames
+  const githubClientId = authProvider === 'github' ? env.GITHUB_CLIENT_ID!.trim() : undefined;
+  const githubAdmin = authProvider === 'github' ? env.GITHUB_ADMIN!.trim().toLowerCase() : undefined;
+  if (githubAdmin && !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(githubAdmin)) {
+    throw new Error('GITHUB_ADMIN 必须是一个 GitHub 用户名。');
+  }
+  const selectedSecrets = authProvider === 'github'
+    ? ['ENCRYPTION_KEY', 'GITHUB_CLIENT_SECRET'] : ['ENCRYPTION_KEY', 'ACCESS_TEAM_DOMAIN', 'ACCESS_AUD'];
+  const secrets = Object.fromEntries(selectedSecrets
     .filter((name) => env[name]?.trim())
     .map((name) => [name, env[name]!.trim()])) as Partial<RuntimeSecrets>;
   if (secrets.ENCRYPTION_KEY) {
@@ -80,7 +93,7 @@ export function readDeploymentSettings(
 
   return {
     accountId, apiToken: env.CLOUDFLARE_API_TOKEN!.trim(), workerName,
-    databaseName, databaseId, customDomain, adminEmail, identityProviderIds, secrets,
+    databaseName, databaseId, customDomain, authProvider, githubClientId, githubAdmin, adminEmail, identityProviderIds, secrets,
   };
 }
 
@@ -88,6 +101,7 @@ export function createDeploymentConfig(
   template: TomlTable,
   settings: DeploymentSettings,
   database: Database,
+  runtime?: { hostname: string; adminAccountId: string; githubAdminId?: string },
 ): TomlTable {
   return {
     ...template,
@@ -96,6 +110,15 @@ export function createDeploymentConfig(
     // 自定义入口启用时关闭备用公网入口，避免绕过对应的 Access 登录页。
     workers_dev: !settings.customDomain,
     preview_urls: false,
+    vars: {
+      ...template.vars as TomlTable,
+      AUTH_PROVIDER: settings.authProvider,
+      ...(runtime ? { APP_ORIGIN: `https://${runtime.hostname}`, ADMIN_ACCOUNT_ID: runtime.adminAccountId } : {}),
+      ...(settings.authProvider === 'github' ? {
+        GITHUB_CLIENT_ID: settings.githubClientId!,
+        ...(runtime?.githubAdminId ? { GITHUB_ADMIN_ID: runtime.githubAdminId } : {}),
+      } : {}),
+    },
     ...(settings.customDomain ? { routes: [{ pattern: settings.customDomain, custom_domain: true }] } : {}),
     d1_databases: (template.d1_databases as TomlTable[]).map((binding) => binding.binding === 'DB'
       ? { ...binding, database_name: database.name, database_id: database.uuid }

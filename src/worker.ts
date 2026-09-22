@@ -2,6 +2,8 @@ import type { Env } from './types';
 import { SSHSessionDO } from './backend/durable-object';
 import { corsPreflightResponse, corsResponse, httpsRedirect, isProductionHttp, jsonError, secureResponse } from './http-security';
 import { currentAccount } from './accounts/auth';
+import { authRoute } from './accounts/auth-routes';
+import { authProvider } from './accounts/auth-provider';
 import { hostsRoute } from './accounts/hosts';
 import { apiFailure, json } from './accounts/http';
 import { locateHost } from './accounts/location';
@@ -145,6 +147,8 @@ export default {
       if (url.pathname === '/api/health' && request.method === 'GET') {
         return corsResponse(secureResponse(Response.json({ status: 'ok', runtime: 'cloudflare-workers', ssh: true }, { headers: { 'Cache-Control': 'no-store' } })));
       }
+      const authentication = await authRoute(request, env);
+      if (authentication) return secureResponse(authentication);
       if (url.hostname.endsWith('.workers.dev') && url.pathname === '/api/diagnostics/location' && request.method === 'GET') {
         const location = await locateHost('8.8.8.8');
         if (!location) return corsResponse(jsonError('位置服务暂时不可用。', 503));
@@ -152,7 +156,7 @@ export default {
       }
       const account = isApiRequest ? await currentAccount(request, env) : null;
       if (isApiRequest && !account) return jsonError('请先登录。', 401);
-      if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ account });
+      if (url.pathname === '/api/auth/me' && request.method === 'GET') return json({ account, provider: authProvider(env) });
       if (url.pathname.startsWith('/api/hosts')) return await hostsRoute(request, env, account!.id, url.pathname);
       if (url.pathname === '/api/session') {
         if (request.method !== 'POST') return corsResponse(jsonError('Method not allowed', 405));

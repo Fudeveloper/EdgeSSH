@@ -1,12 +1,21 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import type { Env } from '../types';
-import { accessToken } from './access-token';
-import { APIError } from './http';
+import type { Env } from '../types.ts';
+import { accessToken } from './access-token.ts';
+import { APIError } from './http.ts';
+import { authProvider } from './auth-provider.ts';
+import { githubAccount } from './github-auth.ts';
 
 export interface Account { id: string; username: string }
 const resolvers = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 export async function currentAccount(request: Request, env: Env): Promise<Account> {
+  const identity = authProvider(env) === 'github'
+    ? await githubAccount(request, env) : await accessAccount(request, env);
+  // 本项目只有一个管理员。认证来源可切换，资料的加密 AAD 与所有者 ID 必须保持不变。
+  return { id: env.ADMIN_ACCOUNT_ID || identity.id, username: identity.username };
+}
+
+async function accessAccount(request: Request, env: Env): Promise<Account> {
   if (!env.ACCESS_AUD || !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN ?? '')) {
     throw new APIError('管理员尚未配置 Zero Trust Access。', 503);
   }

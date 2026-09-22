@@ -1,5 +1,7 @@
 # Cloudflare Zero Trust Access 配置
 
+> 本页仅适用于 `AUTH_PROVIDER=cloudflare`。使用原生 `AUTH_PROVIDER=github` 时不需要 Zero Trust，按[部署指南](../DEPLOYMENT.md#github-模式准备)配置 GitHub OAuth App 即可。两种认证互斥，切换不会更改管理员主机资料。
+
 > **普通部署无需手工执行本页步骤。** 启用 Zero Trust 后，保存 Cloudflare API Token，在 **Actions > Deploy > Run workflow** 输入管理员邮箱，工作流会自动创建/复用 Access 应用、邮箱 Allow 策略、OTP，并获取团队域与 AUD、保存 Worker Secrets。详见[自动部署指南](../DEPLOYMENT.md)。
 >
 > 本页保留控制台操作，供排障、维护既有应用或扩展 GitHub 等登录方式使用。部署脚本不会覆盖已有应用的 IdP 配置。
