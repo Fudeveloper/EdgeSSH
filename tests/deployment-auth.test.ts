@@ -100,7 +100,19 @@ test('a mode switch stops rather than leaving GitHub behind an existing Access l
   }), /无法确认入口/);
 });
 
-test('Cloudflare redeployment validates the real Access app instead of trusting secret names', async () => {
+test('ordinary Cloudflare redeployment confirms the live Access gateway without requiring Zero Trust API', async () => {
+  const cf = readDeploymentSettings(template, { CLOUDFLARE_API_TOKEN: 'token' });
+  const api = new CloudflareApi('token', async () => { throw Error('must not call Zero Trust'); });
+  assert.deepEqual(await prepareAuthentication(api, cf, 'ssh.example.com', {
+    previousProvider: 'cloudflare',
+    existingSecrets: new Set(['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD']),
+    fetcher: async () => new Response(null, {
+      status: 302, headers: { Location: 'https://team.cloudflareaccess.com/cdn-cgi/access/login' },
+    }),
+  }), { secrets: {} });
+});
+
+test('switching to Cloudflare validates the real Access app instead of trusting old secret names', async () => {
   const cf = readDeploymentSettings(template, { CLOUDFLARE_API_TOKEN: 'token' });
   const paths: string[] = [];
   const api = new CloudflareApi('token', async (url) => {
@@ -113,7 +125,9 @@ test('Cloudflare redeployment validates the real Access app instead of trusting 
     }]);
     throw Error(`unexpected ${path}`);
   });
-  assert.deepEqual(await prepareAuthentication(api, cf, 'ssh.example.com'), {
+  assert.deepEqual(await prepareAuthentication(api, cf, 'ssh.example.com', {
+    previousProvider: 'github', existingSecrets: new Set(['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD']),
+  }), {
     secrets: { ACCESS_TEAM_DOMAIN: 'team.cloudflareaccess.com', ACCESS_AUD: 'current-aud' },
   });
   assert.ok(paths.some((path) => path.endsWith('/organizations')));

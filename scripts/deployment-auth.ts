@@ -21,7 +21,25 @@ export async function prepareAuthentication(
 ): Promise<{ secrets: Partial<RuntimeSecrets>; githubAdminId?: string }> {
   const fetcher = options.fetcher ?? fetch;
   if (settings.authProvider === 'cloudflare') {
-    // 每次从对应 Access 应用刷新 Team Domain/AUD；Secret 名称本身不能证明入口仍然有效。
+    const canRetain = options.previousProvider === 'cloudflare'
+      && requiredAuthSecrets('cloudflare').every((name) => options.existingSecrets?.has(name));
+    if (canRetain) {
+      try {
+        const response = await fetcher(`https://${hostname}/api/auth/me`, {
+          redirect: 'manual', signal: AbortSignal.timeout(30_000),
+        });
+        const location = response.headers.get('Location');
+        const target = location ? new URL(location, `https://${hostname}`) : null;
+        if (target && (target.hostname.endsWith('.cloudflareaccess.com')
+          || target.pathname.startsWith('/cdn-cgi/access/'))) {
+          console.log('已确认当前入口仍由 Cloudflare Access 保护，保留现有认证 Secret。');
+          return { secrets: {} };
+        }
+      } catch {
+        throw new Error('无法确认当前入口的 Cloudflare Access 登录是否可用，请检查域名后重试。');
+      }
+    }
+    // 首次启用、切回 Access 或现有配置不完整时，必须从对应应用刷新配置。
     return { secrets: await ensureAccess(api, settings, hostname) };
   }
   // GitHub 新部署完全不调用 Zero Trust API。旧域名若仍在 Access 后面，明确停止，

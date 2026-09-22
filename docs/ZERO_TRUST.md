@@ -131,7 +131,7 @@ https://developers.cloudflare.com/cloudflare-one/access-controls/applications/ht
 | `ACCESS_AUD` | `012345…`（常见外观） | 前面取得的应用受众 (AUD) 标签（Application Audience (AUD) Tag），必须原样复制实际值 |
 | `ENCRYPTION_KEY` | `AbCd…=`（44 字符 Base64） | 32 字节安全随机数的标准 Base64，只在首次部署时生成，后续始终复用；不要使用示例文本 |
 
-`Deploy` 通过标准输入写入机密，后续保留 Worker 中的加密密钥。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。普通重部署会从实际 Access 应用重新取得 Team Domain 与 AUD，并核对现有策略；不会仅凭旧 Secret 名称假定入口有效，也不会覆盖人工维护的 IdP 或明确身份策略。
+`Deploy` 通过标准输入写入机密，后续保留 Worker 中的加密密钥。它们不会写入 `wrangler.toml`、临时文件、普通变量或提交记录。同为 Cloudflare 模式的普通重部署会实际确认入口仍受 Access 保护并保留已有 Team Domain/AUD；首次启用或从 GitHub 切回时才通过 Access API 核对应用与策略。部署不会仅凭旧 Secret 名称假定入口有效，也不会覆盖人工维护的 IdP 或明确身份策略。
 
 `ENCRYPTION_KEY` 的生成要求和保管注意事项见[部署指南](../DEPLOYMENT.md#worker-runtime-secrets)。生产部署不需要在本地执行 Wrangler 机密（Secret）或 Worker 部署命令。
 

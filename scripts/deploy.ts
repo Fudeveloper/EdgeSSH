@@ -45,6 +45,11 @@ async function main(): Promise<void> {
   const hostname = settings.customDomain || await resolveWorkerHostname(api, settings);
   const database = await ensureDatabase(settings);
   const workspace = await readWorkspaceState(api, settings, database);
+  const deployedProvider = workspace.authProvider
+    ?? await readWorkerVariable(api, settings, 'AUTH_PROVIDER');
+  if (deployedProvider !== undefined && deployedProvider !== 'cloudflare' && deployedProvider !== 'github') {
+    throw new Error('已部署的认证方式无效，停止自动覆盖。');
+  }
   const deployedGitHubId = workspace.githubAdminId
     ?? (settings.authProvider === 'github' ? await readWorkerVariable(api, settings, 'GITHUB_ADMIN_ID') : undefined);
   if (deployedGitHubId && !/^[1-9]\d*$/.test(deployedGitHubId)) {
@@ -53,7 +58,7 @@ async function main(): Promise<void> {
   const authentication = await prepareAuthentication(api, settings, hostname, {
     existingSecrets,
     fixedGithubAdminId: deployedGitHubId,
-    previousProvider: workspace.authProvider,
+    previousProvider: deployedProvider,
   });
   const secrets = { ...authentication.secrets, ...await prepareEncryptionSecret(api, settings, database, existingSecrets) };
   maskSecrets(secrets);

@@ -67,7 +67,7 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 1. 校验本地配置，运行类型检查、测试、前端构建和 Wrangler dry-run。
 2. 自动发现唯一账户（显式账户 ID 优先），读取现有 Worker Secret **名称**，不尝试读取密钥明文。
 3. 有 `CUSTOM_DOMAIN` 时使用该入口；否则读取账户 `workers.dev` 子域，未注册时自动注册确定性名称。已有子域不改名，避免影响其他 Worker。
-4. 根据 `AUTH_PROVIDER` 仅准备所选认证：Cloudflare 核对实际 Access 应用、策略、Team Domain 与 AUD，GitHub 首次解析并固定管理员数字 ID，后续直接复用。
+4. 根据 `AUTH_PROVIDER` 仅准备所选认证：Cloudflare 普通重部署核对实际入口仍有 Access 网关，首次启用或从 GitHub 切回时核对应用、策略、Team Domain 与 AUD；GitHub 首次解析并固定管理员数字 ID，后续直接复用。
 5. GitHub 模式不调用 Zero Trust API；Cloudflare 模式不需要 GitHub OAuth 参数。既有 Access 应用不重写人工 IdP 配置。
 6. 按 ID 或名称复用 D1，不存在才创建；指定 ID 不存在时直接失败，不用新空库替代。
 7. 已有 `ENCRYPTION_KEY` 则保留；没有密钥且 D1 没有主机资料时，用安全随机数生成 32 字节密钥。
@@ -113,7 +113,7 @@ EdgeSSH-Auto-Update: true
 - 新部署不需要 GitHub 写 Secrets 权限或额外 GitHub Token。生成的值不写入文件、命令行参数或 Actions artifact。
 - 重跑、推送新代码时保留原加密密钥。GitHub 中遗留的同名密钥不会替换 Worker 中的密钥。
 - **已有 D1 主机资料但缺少密钥时停止部署。** 必须恢复原密钥，不能生成新密钥假装修复。Cloudflare API 不提供 Secret 明文读回，自动生成的密钥也不会显示给用户；不要删除 Worker/Secret。需要独立灾备时，可在首次部署前自行生成并安全备份 32 字节 Base64 密钥，再保存为 `ENCRYPTION_KEY` GitHub Secret。
-- 旧部署无需重新输入邮箱，也不要求复制 Secret 回 GitHub；Cloudflare 模式每次从实际 Access 应用重新核对 Team Domain、AUD 与策略，不以 Secret 名称代替有效性检查，也不会改写人工维护的 IdP 或身份策略。
+- 旧部署无需重新输入邮箱，也不要求复制 Secret 回 GitHub；同为 Cloudflare 模式的普通重部署会实际探测入口仍受 Access 保护并保留现有 Secret，不要求新增 Zero Trust API 权限。首次启用或从 GitHub 切回时才从 Access 应用核对 Team Domain、AUD 与策略；任何路径都不会仅凭 Secret 名称判定有效，也不会改写人工维护的 IdP 或身份策略。
 - 若需要自动创建/管理 Access，或更换 hostname，请提供 `ADMIN_EMAIL`。自动管理使用账户级 Access API；原有 Zone 级应用请先核对，不要在同一 hostname 叠加应用。
 - 切换认证方式不改变 `ENCRYPTION_KEY`、D1 和管理员资料所有者。不要通过更换密钥来切换登录方式。
 
