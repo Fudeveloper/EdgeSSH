@@ -75,6 +75,18 @@ API Token 只存 GitHub Secret，不放普通变量、代码或命令行输入�
 
 设置自定义域名时关闭备用 `workers.dev` 入口，所有部署关闭 preview URL。Cloudflare 模式校验 Access JWT；GitHub 模式使用 state、PKCE 和签名 HttpOnly Cookie。缺少认证不降级为匿名 SSH。
 
+## 官方强制更新
+
+Fork 中的 `Force Update` 工作流每小时第 17 分钟运行，也支持从 Actions 页面手动运行。它会获取官方 `aozorae/EdgeSSH` 的 `main`，扫描 Fork 当前 `main` 到官方最新版本之间的提交，并查找以下完整 Git trailer：
+
+```text
+EdgeSSH-Auto-Update: true
+```
+
+不存在标记时，工作流成功结束且不改代码、不部署。存在标记时，它选择拓扑顺序中最新的标记提交，以 `force-with-lease` 将 Fork 的 `main` 精确更新到该 SHA，然后直接调用 `Deploy` 的可复用部署任务并检出同一个 SHA。部署不依赖这次推送再次触发工作流，因此不会受 GitHub 防递归机制影响。
+
+此能力用于维护者发布必须尽快应用的安全或兼容性更新。精确同步会移除 Fork 在 `main` 上独有的提交；需要长期维护的自定义改动应放在其他分支。若检测期间 `main` 又被人工更新，lease 会让本次任务停止，下一次运行会基于新版本重新检查。仓库或组织策略还必须允许工作流使用 `contents: write`，否则无法更新分支。
+
 ## 其他可选配置
 
 | 名称 | GitHub 位置 | 默认/示例 |

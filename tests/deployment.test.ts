@@ -202,3 +202,21 @@ test('Actions asks for email, keeps Token private and uses the shared deploy ent
   assert.ok(workflow.includes('run: npm run deploy\n'));
   assert.equal(workflow.includes('wrangler d1 migrations apply'), false);
 });
+
+test('Force Update selects a marked official commit and deploys the same SHA directly', async () => {
+  const deploy = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const update = await readFile(new URL('../.github/workflows/force-update.yml', import.meta.url), 'utf8');
+
+  assert.ok(deploy.includes('workflow_call:'));
+  assert.ok(deploy.includes('deployment_ref:'));
+  assert.ok(deploy.includes("ref: ${{ inputs.deployment_ref || github.sha }}"));
+
+  assert.ok(update.includes('OFFICIAL_REPOSITORY: aozorae/EdgeSSH'));
+  assert.ok(update.includes('fetch-depth: 0'));
+  assert.ok(update.includes("trailers:key=EdgeSSH-Auto-Update,valueonly,unfold"));
+  assert.ok(update.includes('--not "${current_sha}"'));
+  assert.ok(update.includes('--force-with-lease="refs/heads/main:${current_sha}"'));
+  assert.ok(update.includes('uses: ./.github/workflows/deploy.yml'));
+  assert.ok(update.includes('deployment_ref: ${{ needs.update.outputs.target_sha }}'));
+  assert.equal(update.includes('npm run deploy'), false);
+});

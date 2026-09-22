@@ -162,7 +162,11 @@ npm ci
 
 `ENCRYPTION_KEY` 由部署流程管理并持久保存在 **Cloudflare Worker Secrets**；Cloudflare 模式另存 `ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`，GitHub 模式同步 `GITHUB_CLIENT_SECRET`。不需要用户复制自动生成的值回 GitHub。加密密钥只在首次部署生成，后续保留，即使 GitHub 留有旧值也不会覆盖线上密钥。不要删除 Worker 或其加密密钥；Cloudflare 不提供密钥明文读回，丢失后无法解密已有资料。
 
-推送 `main` 或手动运行 `Deploy` 都会执行检查和部署。只在首次 Run workflow 输入邮箱也可以：后续未提供邮箱时保留已有认证配置。需要更换域名或重新自动配置 Access 时，请再次提供邮箱。完整权限、旧版迁移及 GitHub 登录扩展说明见[部署指南](DEPLOYMENT.md)；手工维护见 [Zero Trust 指南](docs/ZERO_TRUST.md)。
+推送 `main` 或手动运行 `Deploy` 都会执行检查和部署。只在首次 Run workflow 输入邮箱也可以：后续未提供邮箱时保留已有认证配置。需要更换域名或重新自动配置 Access 时，请再次提供邮箱。
+
+Fork 启用 Actions 后，`Force Update` 每小时检查一次官方 `aozorae/EdgeSSH` 的 `main`。只有当前版本与官方最新版本之间出现带有独立 Git trailer `EdgeSSH-Auto-Update: true` 的提交时，工作流才会将 Fork 的 `main` 精确同步到最新一个标记提交，并在同一次运行中直接部署该 SHA；普通提交不会触发同步。也可从 Actions 页面手动运行检查。该流程会覆盖 Fork 在 `main` 上的自定义提交，自定义开发请保留在其他分支。
+
+完整权限、自动更新、旧版迁移及 GitHub 登录扩展说明见[部署指南](DEPLOYMENT.md)；手工维护见 [Zero Trust 指南](docs/ZERO_TRUST.md)。
 
 ## 本地开发
 
