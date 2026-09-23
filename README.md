@@ -3,7 +3,7 @@
 
 <div align="center">
 
-# EdgeSSH
+# EdgeSSH1
 
 **打开浏览器，连接你的服务器。**
 
